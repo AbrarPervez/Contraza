@@ -1,0 +1,82 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function ownsUserData(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validDraft(data) {
+      return data.keys().hasAll([
+          'title', 'params', 'content', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'params', 'content', 'createdAt', 'updatedAt'
+        ])
+        && data.title is string
+        && data.params is map
+        && data.content is string
+        && data.createdAt is string
+        && data.updatedAt is string;
+    }
+
+    function validDraftUpdate() {
+      return validDraft(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'params', 'content', 'updatedAt'
+        ]);
+    }
+
+    function validReviewThread(data) {
+      return data.keys().hasAll([
+          'title', 'contractText', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'contractText', 'createdAt', 'updatedAt'
+        ])
+        && data.title is string
+        && data.contractText is string
+        && data.createdAt is string
+        && data.updatedAt is string;
+    }
+
+    function validReviewThreadUpdate() {
+      return validReviewThread(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'contractText', 'updatedAt'
+        ]);
+    }
+
+    match /users/{userId}/leaseDrafts/{draftId} {
+      allow get, list: if ownsUserData(userId);
+      allow create: if ownsUserData(userId)
+        && validDraft(request.resource.data);
+      allow update: if ownsUserData(userId)
+        && validDraftUpdate();
+      allow delete: if ownsUserData(userId);
+    }
+
+    match /users/{userId}/reviewThreads/{threadId} {
+      allow get, list: if ownsUserData(userId);
+      allow create: if ownsUserData(userId)
+        && validReviewThread(request.resource.data);
+      allow update: if ownsUserData(userId)
+        && validReviewThreadUpdate();
+      allow delete: if ownsUserData(userId);
+
+      match /messages/{messageId} {
+        // Users can read only their own review messages
+        allow get, list: if ownsUserData(userId);
+
+        // Only trusted backend functions can create messages
+        allow create: if false;
+
+        // Messages cannot be modified by clients
+        allow update: if false;
+
+        // Users can delete their own messages
+        allow delete: if ownsUserData(userId);
+      }
+    }
+  }
+}
