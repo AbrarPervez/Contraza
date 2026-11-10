@@ -1,7 +1,12 @@
-import { collection, doc, type CollectionReference, type DocumentReference } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  type CollectionReference,
+  type DocumentReference,
+} from "firebase/firestore";
 import { getFirebaseAuth, getFirestoreDb } from "./client";
 
-export type UserCollection = "leaseDrafts" | "reviewThreads";
+export type UserCollection = "leaseDrafts" | "reviewThreads" | "draftChats";
 
 export interface LeaseDraftData {
   title: string;
@@ -18,9 +23,24 @@ export interface ReviewThreadData {
   updatedAt: string;
 }
 
+export interface DraftChatData {
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReviewMessageData {
   role: "user" | "assistant";
   content: string;
+  status?: "streaming" | "complete";
+  createdAt: string;
+}
+
+export interface DraftChatMessageData {
+  role: "user" | "assistant";
+  content: string;
+  contractText?: string;
+  status?: "streaming" | "complete";
   createdAt: string;
 }
 
@@ -32,12 +52,17 @@ function currentUserId() {
 
 export function userCollection(name: "leaseDrafts"): CollectionReference<LeaseDraftData>;
 export function userCollection(name: "reviewThreads"): CollectionReference<ReviewThreadData>;
+export function userCollection(name: "draftChats"): CollectionReference<DraftChatData>;
 export function userCollection(name: UserCollection) {
   return collection(getFirestoreDb(), "users", currentUserId(), name);
 }
 
 export function userDocument(name: "leaseDrafts", id: string): DocumentReference<LeaseDraftData>;
-export function userDocument(name: "reviewThreads", id: string): DocumentReference<ReviewThreadData>;
+export function userDocument(
+  name: "reviewThreads",
+  id: string,
+): DocumentReference<ReviewThreadData>;
+export function userDocument(name: "draftChats", id: string): DocumentReference<DraftChatData>;
 export function userDocument(name: UserCollection, id: string) {
   return doc(getFirestoreDb(), "users", currentUserId(), name, id);
 }
@@ -52,4 +77,16 @@ export function reviewMessagesCollection(threadId: string) {
     "messages",
   );
   return messages as CollectionReference<ReviewMessageData>;
+}
+
+export function draftChatMessagesCollection(chatId: string) {
+  const messages = collection(
+    getFirestoreDb(),
+    "users",
+    currentUserId(),
+    "draftChats",
+    chatId,
+    "messages",
+  );
+  return messages as CollectionReference<DraftChatMessageData>;
 }

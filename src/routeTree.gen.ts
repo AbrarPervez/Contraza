@@ -16,8 +16,11 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedReviewRouteImport } from './routes/_authenticated/review'
 import { Route as AuthenticatedDraftIndexRouteImport } from './routes/_authenticated/draft.index'
 import { Route as AuthenticatedDraftIdRouteImport } from './routes/_authenticated/draft.$id'
+import { Route as AuthenticatedDraftChatRouteImport } from './routes/_authenticated/draft.chat'
+import { Route as AuthenticatedDraftStructuredRouteImport } from './routes/_authenticated/draft.structured'
 import { Route as AuthenticatedReviewIndexRouteImport } from './routes/_authenticated/review.index'
 import { Route as AuthenticatedReviewThreadIdRouteImport } from './routes/_authenticated/review.$threadId'
+import { Route as AuthenticatedDraftChatChatIdRouteImport } from './routes/_authenticated/draft.chat.$chatId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -53,6 +56,17 @@ const AuthenticatedDraftIdRoute = AuthenticatedDraftIdRouteImport.update({
   path: '/draft/$id',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedDraftChatRoute = AuthenticatedDraftChatRouteImport.update({
+  id: '/draft/chat',
+  path: '/draft/chat',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedDraftStructuredRoute =
+  AuthenticatedDraftStructuredRouteImport.update({
+    id: '/draft/structured',
+    path: '/draft/structured',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedReviewIndexRoute =
   AuthenticatedReviewIndexRouteImport.update({
     id: '/',
@@ -65,6 +79,12 @@ const AuthenticatedReviewThreadIdRoute =
     path: '/$threadId',
     getParentRoute: () => AuthenticatedReviewRoute,
   } as any)
+const AuthenticatedDraftChatChatIdRoute =
+  AuthenticatedDraftChatChatIdRouteImport.update({
+    id: '/$chatId',
+    path: '/$chatId',
+    getParentRoute: () => AuthenticatedDraftChatRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -72,18 +92,24 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/review': typeof AuthenticatedReviewRouteWithChildren
   '/draft/$id': typeof AuthenticatedDraftIdRoute
+  '/draft/chat': typeof AuthenticatedDraftChatRouteWithChildren
+  '/draft/structured': typeof AuthenticatedDraftStructuredRoute
   '/review/$threadId': typeof AuthenticatedReviewThreadIdRoute
   '/draft/': typeof AuthenticatedDraftIndexRoute
   '/review/': typeof AuthenticatedReviewIndexRoute
+  '/draft/chat/$chatId': typeof AuthenticatedDraftChatChatIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/draft/$id': typeof AuthenticatedDraftIdRoute
+  '/draft/chat': typeof AuthenticatedDraftChatRouteWithChildren
+  '/draft/structured': typeof AuthenticatedDraftStructuredRoute
   '/review/$threadId': typeof AuthenticatedReviewThreadIdRoute
   '/draft': typeof AuthenticatedDraftIndexRoute
   '/review': typeof AuthenticatedReviewIndexRoute
+  '/draft/chat/$chatId': typeof AuthenticatedDraftChatChatIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -93,9 +119,12 @@ export interface FileRoutesById {
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/review': typeof AuthenticatedReviewRouteWithChildren
   '/_authenticated/draft/$id': typeof AuthenticatedDraftIdRoute
+  '/_authenticated/draft/chat': typeof AuthenticatedDraftChatRouteWithChildren
+  '/_authenticated/draft/structured': typeof AuthenticatedDraftStructuredRoute
   '/_authenticated/review/$threadId': typeof AuthenticatedReviewThreadIdRoute
   '/_authenticated/draft/': typeof AuthenticatedDraftIndexRoute
   '/_authenticated/review/': typeof AuthenticatedReviewIndexRoute
+  '/_authenticated/draft/chat/$chatId': typeof AuthenticatedDraftChatChatIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -105,18 +134,24 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/review'
     | '/draft/$id'
+    | '/draft/chat'
+    | '/draft/structured'
     | '/review/$threadId'
     | '/draft/'
     | '/review/'
+    | '/draft/chat/$chatId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/auth'
     | '/dashboard'
     | '/draft/$id'
+    | '/draft/chat'
+    | '/draft/structured'
     | '/review/$threadId'
     | '/draft'
     | '/review'
+    | '/draft/chat/$chatId'
   id:
     | '__root__'
     | '/'
@@ -125,9 +160,12 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard'
     | '/_authenticated/review'
     | '/_authenticated/draft/$id'
+    | '/_authenticated/draft/chat'
+    | '/_authenticated/draft/structured'
     | '/_authenticated/review/$threadId'
     | '/_authenticated/draft/'
     | '/_authenticated/review/'
+    | '/_authenticated/draft/chat/$chatId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -187,6 +225,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDraftIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/draft/chat': {
+      id: '/_authenticated/draft/chat'
+      path: '/draft/chat'
+      fullPath: '/draft/chat'
+      preLoaderRoute: typeof AuthenticatedDraftChatRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/draft/structured': {
+      id: '/_authenticated/draft/structured'
+      path: '/draft/structured'
+      fullPath: '/draft/structured'
+      preLoaderRoute: typeof AuthenticatedDraftStructuredRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/review/': {
       id: '/_authenticated/review/'
       path: '/'
@@ -200,6 +252,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/review/$threadId'
       preLoaderRoute: typeof AuthenticatedReviewThreadIdRouteImport
       parentRoute: typeof AuthenticatedReviewRoute
+    }
+    '/_authenticated/draft/chat/$chatId': {
+      id: '/_authenticated/draft/chat/$chatId'
+      path: '/$chatId'
+      fullPath: '/draft/chat/$chatId'
+      preLoaderRoute: typeof AuthenticatedDraftChatChatIdRouteImport
+      parentRoute: typeof AuthenticatedDraftChatRoute
     }
   }
 }
@@ -217,10 +276,26 @@ const AuthenticatedReviewRouteChildren: AuthenticatedReviewRouteChildren = {
 const AuthenticatedReviewRouteWithChildren =
   AuthenticatedReviewRoute._addFileChildren(AuthenticatedReviewRouteChildren)
 
+interface AuthenticatedDraftChatRouteChildren {
+  AuthenticatedDraftChatChatIdRoute: typeof AuthenticatedDraftChatChatIdRoute
+}
+
+const AuthenticatedDraftChatRouteChildren: AuthenticatedDraftChatRouteChildren =
+  {
+    AuthenticatedDraftChatChatIdRoute: AuthenticatedDraftChatChatIdRoute,
+  }
+
+const AuthenticatedDraftChatRouteWithChildren =
+  AuthenticatedDraftChatRoute._addFileChildren(
+    AuthenticatedDraftChatRouteChildren,
+  )
+
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedReviewRoute: typeof AuthenticatedReviewRouteWithChildren
   AuthenticatedDraftIdRoute: typeof AuthenticatedDraftIdRoute
+  AuthenticatedDraftChatRoute: typeof AuthenticatedDraftChatRouteWithChildren
+  AuthenticatedDraftStructuredRoute: typeof AuthenticatedDraftStructuredRoute
   AuthenticatedDraftIndexRoute: typeof AuthenticatedDraftIndexRoute
 }
 
@@ -228,6 +303,8 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedReviewRoute: AuthenticatedReviewRouteWithChildren,
   AuthenticatedDraftIdRoute: AuthenticatedDraftIdRoute,
+  AuthenticatedDraftChatRoute: AuthenticatedDraftChatRouteWithChildren,
+  AuthenticatedDraftStructuredRoute: AuthenticatedDraftStructuredRoute,
   AuthenticatedDraftIndexRoute: AuthenticatedDraftIndexRoute,
 }
 

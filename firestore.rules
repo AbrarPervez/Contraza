@@ -47,6 +47,14 @@ service cloud.firestore {
         ]);
     }
 
+    function validDraftChat(data) {
+      return data.keys().hasAll(['title', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'createdAt', 'updatedAt'])
+        && data.title is string
+        && data.createdAt is string
+        && data.updatedAt is string;
+    }
+
     match /users/{userId}/leaseDrafts/{draftId} {
       allow get, list: if ownsUserData(userId);
       allow create: if ownsUserData(userId)
@@ -75,6 +83,24 @@ service cloud.firestore {
         allow update: if false;
 
         // Users can delete their own messages
+        allow delete: if ownsUserData(userId);
+      }
+    }
+
+    match /users/{userId}/draftChats/{chatId} {
+      allow get, list: if ownsUserData(userId);
+      allow create: if ownsUserData(userId)
+        && validDraftChat(request.resource.data);
+      allow update: if ownsUserData(userId)
+        && validDraftChat(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'updatedAt'
+        ]);
+      allow delete: if ownsUserData(userId);
+
+      match /messages/{messageId} {
+        allow get, list: if ownsUserData(userId);
+        allow create, update: if false;
         allow delete: if ownsUserData(userId);
       }
     }

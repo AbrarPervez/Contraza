@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { getDoc, getDocs, orderBy, query, updateDoc } from "firebase/firestore";
+import { getDoc, onSnapshot, orderBy, query, updateDoc } from "firebase/firestore";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { reviewMessagesCollection, userDocument } from "@/integrations/firebase/data";
@@ -11,18 +11,33 @@ import { sendReviewMessage, applyLeaseEdit } from "@/lib/lease.functions";
 import { looksLikeContract } from "@/lib/contracts";
 
 export const Route = createFileRoute("/_authenticated/review/$threadId")({
-  head: () => ({ meta: [
-    { title: "Contract review conversation — Contraza" },
-    { name: "description", content: "Review clauses, ask questions and revise your commercial lease or NDA in Contraza." },
-    { property: "og:title", content: "Contract review conversation — Contraza" },
-    { property: "og:description", content: "Review clauses, ask questions and revise your commercial lease or NDA in Contraza." },
-    { property: "og:type", content: "website" },
-    { name: "twitter:card", content: "summary_large_image" },
-  ] }),
+  head: () => ({
+    meta: [
+      { title: "Contract review conversation — Contraza" },
+      {
+        name: "description",
+        content:
+          "Review clauses, ask questions and revise your commercial lease or NDA in Contraza.",
+      },
+      { property: "og:title", content: "Contract review conversation — Contraza" },
+      {
+        property: "og:description",
+        content:
+          "Review clauses, ask questions and revise your commercial lease or NDA in Contraza.",
+      },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary_large_image" },
+    ],
+  }),
   component: Thread,
 });
 
-type Msg = { id: string; role: "user" | "assistant"; content: string };
+type Msg = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  status?: "streaming" | "complete";
+};
 
 const SUGGESTIONS = [
   "Summarise the key commercial terms",
@@ -52,33 +67,52 @@ function ThreadView({ threadId }: { threadId: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
+  useEffect(
+    () =>
+      onSnapshot(
+        query(reviewMessagesCollection(threadId), orderBy("createdAt")),
+        (snapshot) => {
+          setMsgs(
+            snapshot.docs.map((message) => {
+              const data = message.data();
+              return {
+                id: message.id,
+                role: data["role"] as Msg["role"],
+                content: data["content"] as string,
+                ...(data["status"] === "streaming" || data["status"] === "complete"
+                  ? { status: data["status"] }
+                  : {}),
+              };
+            }),
+          );
+        },
+        (error) => toast.error(error.message || "Could not receive live review updates."),
+      ),
+    [threadId],
+  );
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [thread, messages] = await Promise.all([
-          getDoc(userDocument("reviewThreads", threadId)),
-          getDocs(query(reviewMessagesCollection(threadId), orderBy("createdAt"))),
-        ]);
+        const thread = await getDoc(userDocument("reviewThreads", threadId));
         if (cancelled) return;
         if (!thread.exists()) throw new Error("Review not found.");
         const contractText = thread.data()["contractText"] ?? "";
         setContract(contractText);
         setSavedContract(contractText);
         setShowDoc(!contractText);
-        setMsgs(messages.docs.map((message) => ({
-          id: message.id,
-          role: message.data()["role"] as Msg["role"],
-          content: message.data()["content"] as string,
-        })));
         inputRef.current?.focus();
       } catch (error) {
-        if (!cancelled) toast.error(error instanceof Error ? error.message : "Could not load this review.");
+        if (!cancelled)
+          toast.error(error instanceof Error ? error.message : "Could not load this review.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [threadId]);
 
   useEffect(() => {
@@ -86,17 +120,24 @@ function ThreadView({ threadId }: { threadId: string }) {
   }, [msgs, pending]);
 
   async function uploadFile(file: File) {
-    if (file.size > 2_000_000) { toast.error("File too large — please use a file under 2 MB"); return; }
+    if (file.size > 2_000_000) {
+      toast.error("File too large — please use a file under 2 MB");
+      return;
+    }
     try {
       const text = await file.text();
-      if (!text.trim()) { toast.error("That file appears to be empty"); return; }
+      if (!text.trim()) {
+        toast.error("That file appears to be empty");
+        return;
+      }
       if (new TextEncoder().encode(text).byteLength > MAX_CONTRACT_BYTES) {
         toast.error("Contract text is too large for Firestore. Please use a file under 700 KB.");
         return;
       }
       if (!looksLikeContract(text)) {
         toast.error("This doesn't look like a contract", {
-          description: "The uploaded file doesn't contain typical contract language. Please upload a commercial lease or NDA, or paste its text.",
+          description:
+            "The uploaded file doesn't contain typical contract language. Please upload a commercial lease or NDA, or paste its text.",
           duration: 6000,
         });
         return;
@@ -105,7 +146,9 @@ function ThreadView({ threadId }: { threadId: string }) {
       setShowDoc(true);
       toast.success(`Loaded ${file.name} — press "Attach contract" to save it`);
     } catch {
-      toast.error("Couldn't read that file. Please use a plain-text (.txt) or Markdown (.md) file, or paste the text.");
+      toast.error(
+        "Couldn't read that file. Please use a plain-text (.txt) or Markdown (.md) file, or paste the text.",
+      );
     }
   }
 
@@ -139,7 +182,16 @@ function ThreadView({ threadId }: { threadId: string }) {
     setPending(true);
     try {
       const r = await sendReviewMessage({ data: { threadId, message } });
-      setMsgs((m) => [...m, { id: crypto.randomUUID(), role: "assistant", content: r.reply }]);
+      setMsgs((current) =>
+        current.some((item) => item.id === r.messageId)
+          ? current.map((item) =>
+              item.id === r.messageId ? { ...item, content: r.reply, status: "complete" } : item,
+            )
+          : [
+              ...current,
+              { id: r.messageId, role: "assistant", content: r.reply, status: "complete" },
+            ],
+      );
       qc.invalidateQueries({ queryKey: ["threads"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Something went wrong");
@@ -163,7 +215,12 @@ function ThreadView({ threadId }: { threadId: string }) {
       setMsgs((m) => [
         ...m,
         { id: crypto.randomUUID(), role: "user", content: `✏️ Edit requested: ${instruction}` },
-        { id: crypto.randomUUID(), role: "assistant", content: "I've applied that change and updated the attached contract. Open the contract panel to review the revised text." },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content:
+            "I've applied that change and updated the attached contract. Open the contract panel to review the revised text.",
+        },
       ]);
       toast.success("Contract updated with your change");
     } catch (e) {
@@ -181,7 +238,12 @@ function ThreadView({ threadId }: { threadId: string }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-sm">
             {savedContract ? (
-              <>📄 Contract attached · <span className="text-muted-foreground">{savedContract.length.toLocaleString()} characters</span></>
+              <>
+                📄 Contract attached ·{" "}
+                <span className="text-muted-foreground">
+                  {savedContract.length.toLocaleString()} characters
+                </span>
+              </>
             ) : (
               <span className="text-muted-foreground">No contract attached yet</span>
             )}
@@ -216,7 +278,9 @@ function ThreadView({ threadId }: { threadId: string }) {
               className="bg-background font-mono text-xs"
             />
             <div className="flex justify-end">
-              <Button size="sm" onClick={saveContract} disabled={contract === savedContract}>Attach contract</Button>
+              <Button size="sm" onClick={saveContract} disabled={contract === savedContract}>
+                Attach contract
+              </Button>
             </div>
           </div>
         )}
@@ -225,12 +289,19 @@ function ThreadView({ threadId }: { threadId: string }) {
             <input
               value={editInstruction}
               onChange={(e) => setEditInstruction(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") applyEdit(); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyEdit();
+              }}
               placeholder='Describe a change, e.g. "reduce the notice period to 2 months"…'
               className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm"
               disabled={editing}
             />
-            <Button size="sm" variant="outline" onClick={applyEdit} disabled={editing || !editInstruction.trim()}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={applyEdit}
+              disabled={editing || !editInstruction.trim()}
+            >
               {editing ? "Applying…" : "Edit with AI"}
             </Button>
           </div>
@@ -244,7 +315,12 @@ function ThreadView({ threadId }: { threadId: string }) {
               <p className="font-serif text-2xl">Ask your reviewer anything.</p>
               <div className="mt-6 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (
-                  <Button key={s} variant="outline" onClick={() => send(s)} className="h-auto whitespace-normal bg-paper text-sm">
+                  <Button
+                    key={s}
+                    variant="outline"
+                    onClick={() => send(s)}
+                    className="h-auto whitespace-normal bg-paper text-sm"
+                  >
                     {s}
                   </Button>
                 ))}
@@ -254,19 +330,32 @@ function ThreadView({ threadId }: { threadId: string }) {
           {msgs.map((m) =>
             m.role === "user" ? (
               <div key={m.id} className="flex justify-end">
-                <div className="max-w-[80%] whitespace-pre-wrap rounded-md bg-ink px-4 py-2.5 text-sm text-ink-foreground">{m.content}</div>
+                <div className="max-w-[80%] whitespace-pre-wrap rounded-md bg-ink px-4 py-2.5 text-sm text-ink-foreground">
+                  {m.content}
+                </div>
               </div>
             ) : (
               <div key={m.id} className="flex gap-3">
-                <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-seal font-serif text-xs font-semibold text-seal">§</span>
-                <div className="chat-md min-w-0 flex-1 text-sm"><ReactMarkdown>{m.content}</ReactMarkdown></div>
+                <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 border-seal font-serif text-xs font-semibold text-seal">
+                  §
+                </span>
+                <div className="chat-md min-w-0 flex-1 text-sm">
+                  <ReactMarkdown>{m.content}</ReactMarkdown>
+                  {m.status === "streaming" && (
+                    <span className="animate-pulse text-xs text-muted-foreground">Writing…</span>
+                  )}
+                </div>
               </div>
             ),
           )}
-          {pending && (
+          {pending && !msgs.some((message) => message.status === "streaming") && (
             <div className="flex gap-3">
-              <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-seal font-serif text-xs text-seal">§</span>
-              <span className="animate-pulse pt-1 text-sm text-muted-foreground">Reviewing the agreement…</span>
+              <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-seal font-serif text-xs text-seal">
+                §
+              </span>
+              <span className="animate-pulse pt-1 text-sm text-muted-foreground">
+                Reviewing the agreement…
+              </span>
             </div>
           )}
           <div ref={endRef} />
@@ -274,7 +363,10 @@ function ThreadView({ threadId }: { threadId: string }) {
       </div>
 
       <form
-        onSubmit={(e) => { e.preventDefault(); send(input); }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(input);
+        }}
         className="border-t bg-paper px-6 py-4"
       >
         <div className="mx-auto flex max-w-3xl items-end gap-2">
@@ -283,11 +375,18 @@ function ThreadView({ threadId }: { threadId: string }) {
             rows={2}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
             placeholder="Ask about clauses, risks, obligations…"
             className="resize-none bg-background"
           />
-          <Button type="submit" disabled={pending || !input.trim()}>Send</Button>
+          <Button type="submit" disabled={pending || !input.trim()}>
+            Send
+          </Button>
         </div>
       </form>
     </div>
