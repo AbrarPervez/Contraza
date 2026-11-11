@@ -26,6 +26,11 @@ const MAX_503_RETRIES = 2;
 const MAX_RETRY_AFTER_MS = 5_000;
 const GEMINI_REQUEST_TIMEOUT_MS = 120_000;
 
+function logGeminiMetric(metric: Record<string, string | number | null>) {
+  // Never include prompts, contract text, API keys, or user identifiers in logs.
+  console.info("[Contraza Gemini]", metric);
+}
+
 function retryDelayMs(retryAfter: string | null, retryNumber: number) {
   if (retryAfter) {
     const seconds = Number(retryAfter);
@@ -59,12 +64,23 @@ export async function generateGeminiText(
     }),
     signal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS),
   };
+  const startedAt = Date.now();
+  let selectedModel = "";
   let response: Response | undefined;
   for (const model of MODEL_FALLBACKS) {
+    selectedModel = model;
     for (let attempt = 0; attempt <= MAX_503_RETRIES; attempt += 1) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      const attemptStartedAt = Date.now();
       try {
         response = await fetch(url, request);
+        logGeminiMetric({
+          operation: "generateContent",
+          model,
+          status: response.status,
+          requestMs: Date.now() - attemptStartedAt,
+          attempt: attempt + 1,
+        });
       } catch (error) {
         if (
           typeof error === "object" &&
@@ -78,6 +94,13 @@ export async function generateGeminiText(
         }
         throw error;
       }
+      logGeminiMetric({
+        operation: "streamGenerateContent",
+        model,
+        status: response.status,
+        requestMs: Date.now() - attemptStartedAt,
+        attempt: attempt + 1,
+      });
       if (response.status !== 503) break;
       if (attempt < MAX_503_RETRIES) {
         const retryAfter = response.headers.get("retry-after");
@@ -115,6 +138,13 @@ export async function generateGeminiText(
       reason ? `Gemini returned no text (finish reason: ${reason}).` : "Gemini returned no text.",
     );
   }
+  logGeminiMetric({
+    operation: "generateContent",
+    model: selectedModel,
+    status: response.status,
+    totalMs: Date.now() - startedAt,
+    outputChars: text.length,
+  });
   return text;
 }
 
@@ -138,9 +168,14 @@ export async function generateGeminiTextStream(
       generationConfig: { maxOutputTokens: 8192 },
     }),
   };
+  const startedAt = Date.now();
+  let selectedModel = "";
+  let firstTextAt: number | null = null;
   let response: Response | undefined;
   for (const model of MODEL_FALLBACKS) {
+    selectedModel = model;
     for (let attempt = 0; attempt <= MAX_503_RETRIES; attempt += 1) {
+      const attemptStartedAt = Date.now();
       response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
         request,
@@ -194,6 +229,14 @@ export async function generateGeminiTextStream(
       .map((part) => part.text ?? "")
       .join("");
     if (delta) {
+      if (firstTextAt === null) {
+        firstTextAt = Date.now();
+        logGeminiMetric({
+          operation: "streamGenerateContent",
+          model: selectedModel,
+          timeToFirstTextMs: firstTextAt - startedAt,
+        });
+      }
       text += delta;
       await onText(text);
     }
@@ -239,5 +282,13 @@ export async function generateGeminiTextStream(
 
   const completeText = text.trim();
   if (!completeText) throw new Error("Gemini returned no text.");
+  logGeminiMetric({
+    operation: "streamGenerateContent",
+    model: selectedModel,
+    status: response.status,
+    totalMs: Date.now() - startedAt,
+    timeToFirstTextMs: firstTextAt === null ? null : firstTextAt - startedAt,
+    outputChars: completeText.length,
+  });
   return completeText;
 }
