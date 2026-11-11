@@ -94,13 +94,6 @@ export async function generateGeminiText(
         }
         throw error;
       }
-      logGeminiMetric({
-        operation: "streamGenerateContent",
-        model,
-        status: response.status,
-        requestMs: Date.now() - attemptStartedAt,
-        attempt: attempt + 1,
-      });
       if (response.status !== 503) break;
       if (attempt < MAX_503_RETRIES) {
         const retryAfter = response.headers.get("retry-after");
@@ -180,6 +173,13 @@ export async function generateGeminiTextStream(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
         request,
       );
+      logGeminiMetric({
+        operation: "streamGenerateContent",
+        model,
+        status: response.status,
+        requestMs: Date.now() - attemptStartedAt,
+        attempt: attempt + 1,
+      });
       if (response.status !== 503) break;
       if (attempt < MAX_503_RETRIES) {
         await new Promise((resolve) =>
