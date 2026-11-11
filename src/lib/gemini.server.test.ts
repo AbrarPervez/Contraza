@@ -30,6 +30,10 @@ describe("generateGeminiText", () => {
     expect(JSON.parse(String(request.body))).toMatchObject({
       systemInstruction: { parts: [{ text: "system instruction" }] },
       contents: [{ role: "user", parts: [{ text: "draft this" }] }],
+      generationConfig: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { thinkingLevel: "low" },
+      },
     });
   });
 
@@ -53,7 +57,27 @@ describe("generateGeminiText", () => {
 
     await expect(
       generateGeminiText("system", [{ role: "user", parts: [{ text: "draft this" }] }]),
-    ).rejects.toThrow("Gemini request timed out after 120 seconds.");
+    ).rejects.toThrow("Gemini timed out on all configured models.");
+  });
+
+  it("tries the fallback model when the primary model times out", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "server-secret");
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("Timed out", "TimeoutError"))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "Fallback draft" }] } }] }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      generateGeminiText("system", [{ role: "user", parts: [{ text: "draft this" }] }]),
+    ).resolves.toBe("Fallback draft");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/models/gemini-3.6-flash:generateContent");
   });
 
   it("surfaces API errors without returning a success-shaped fallback", async () => {
@@ -169,8 +193,12 @@ describe("generateGeminiText", () => {
     expect(onText).toHaveBeenNthCalledWith(2, "First second");
     expect(fetchMock.mock.calls[0]?.[0]).toContain(":streamGenerateContent?alt=sse");
     const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(request.signal).toBeUndefined();
     expect(JSON.parse(String(request.body))).toMatchObject({
-      generationConfig: { maxOutputTokens: 8192 },
+      generationConfig: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { thinkingLevel: "low" },
+      },
     });
   });
 

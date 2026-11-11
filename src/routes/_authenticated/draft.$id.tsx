@@ -90,13 +90,28 @@ function DraftEditor() {
     if (missing.length) { toast.error("Please complete the required fields marked *"); return; }
     if (content && !window.confirm("Re-generating will replace the current contract, including any details or edits you saved. Continue?")) return;
     setGenerating(true);
+    const diagnosticId = crypto.randomUUID();
+    let stage = "firebase_prewrite";
+    const startedAt = Date.now();
     try {
       // flush save first
       await updateDoc(userDocument("leaseDrafts", id), { params: p, updatedAt: new Date().toISOString() });
-      const r = await generateLease({ data: { draftId: id } });
+      stage = "tanstack_server_function";
+      const r = await generateLease({ data: { draftId: id, diagnosticId } });
       setContent(r.content);
       toast.success(p && isNda(p) ? "NDA drafted" : "Lease agreement drafted");
     } catch (e) {
+      console.warn("[Contraza Draft Client]", {
+        requestId: diagnosticId,
+        stage,
+        totalMs: Date.now() - startedAt,
+        failureCategory:
+          e instanceof TypeError
+            ? "browser_fetch_error"
+            : stage === "firebase_prewrite"
+              ? "firebase_error"
+              : "server_function_error",
+      });
       toast.error(e instanceof Error ? e.message : "Generation failed");
     } finally {
       setGenerating(false);

@@ -1,9 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
+import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 import { requireFirebaseAuth } from "@/integrations/firebase/auth-middleware";
 import { generateGeminiText, generateGeminiTextStream } from "./gemini.server";
 import { isNda, missingContractFields, restoreContractParams } from "./contracts";
-import { parseUnstructuredDraftResponse } from "./unstructured-draft";
+import { streamUnstructuredDraftResponse } from "./unstructured-draft.server";
 
 const documentId = z
   .string()
@@ -19,38 +20,85 @@ End with an "IN WITNESS WHEREOF" execution block stating the place and date of s
 
 export const generateLease = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { draftId: string }) => z.object({ draftId: documentId }).parse(d))
+  .inputValidator((d: { draftId: string; diagnosticId?: string }) =>
+    z.object({ draftId: documentId, diagnosticId: z.string().uuid().optional() }).parse(d),
+  )
   .handler(async ({ data, context }) => {
+    const requestId = data.diagnosticId ?? crypto.randomUUID();
+    const startedAt = Date.now();
+    let stage = "firestore_read";
     const draftRef = context.adminDb
       .collection("users")
       .doc(context.userId)
       .collection("leaseDrafts")
       .doc(data.draftId);
-    const draft = await draftRef.get();
-    if (!draft.exists) throw new Error("Draft not found");
-    const params = restoreContractParams(draft.data()?.["params"]);
-    const missing = missingContractFields(params);
-    if (missing.length) throw new Error(`Please fill required fields: ${missing.join(", ")}`);
+    try {
+      const readStartedAt = Date.now();
+      const draft = await draftRef.get();
+      console.info("[Contraza Draft]", {
+        requestId,
+        stage: "firestore_read",
+        requestMs: Date.now() - readStartedAt,
+        found: draft.exists,
+      });
+      if (!draft.exists) throw new Error("Draft not found");
+      const params = restoreContractParams(draft.data()?.["params"]);
+      const missing = missingContractFields(params);
+      if (missing.length) throw new Error(`Please fill required fields: ${missing.join(", ")}`);
 
-    const content = await generateGeminiText(isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM, [
-      {
-        role: "user",
-        parts: [
+      stage = "gemini";
+      const content = await generateGeminiText(
+        isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM,
+        [
           {
-            text: `${isNda(params) ? "NDA" : "Lease"} parameters (JSON):\n${JSON.stringify(params, null, 2)}`,
+            role: "user",
+            parts: [
+              {
+                text: `${isNda(params) ? "NDA" : "Lease"} parameters (JSON):\n${JSON.stringify(params, null, 2)}`,
+              },
+            ],
           },
         ],
-      },
-    ]);
-    if (!content) throw new Error("The AI returned an empty draft. Please try again.");
-    if (new TextEncoder().encode(content).byteLength > 700_000) {
-      throw new Error(
-        "The generated contract is too large to save. Please try generating a shorter draft.",
+        { requestId },
       );
-    }
+      if (!content) throw new Error("The AI returned an empty draft. Please try again.");
+      if (new TextEncoder().encode(content).byteLength > 700_000) {
+        throw new Error(
+          "The generated contract is too large to save. Please try generating a shorter draft.",
+        );
+      }
 
-    await draftRef.update({ content, updatedAt: new Date().toISOString() });
-    return { content };
+      stage = "firestore_write";
+      const writeStartedAt = Date.now();
+      await draftRef.update({ content, updatedAt: new Date().toISOString() });
+      console.info("[Contraza Draft]", {
+        requestId,
+        stage: "firestore_write",
+        requestMs: Date.now() - writeStartedAt,
+        totalMs: Date.now() - startedAt,
+        failureCategory: "none",
+      });
+      return { content };
+    } catch (error) {
+      const isTimeout =
+        error instanceof Error &&
+        (error.name === "TimeoutError" ||
+          (error.cause instanceof Error && error.cause.name === "TimeoutError"));
+      console.warn("[Contraza Draft]", {
+        requestId,
+        stage,
+        totalMs: Date.now() - startedAt,
+        failureCategory:
+          stage === "gemini"
+            ? isTimeout
+              ? "gemini_timeout"
+              : "gemini_error"
+            : stage.startsWith("firestore_")
+              ? "firebase_error"
+              : "validation_error",
+      });
+      throw error;
+    }
   });
 
 const NDA_SYSTEM = `You are a senior commercial lawyer drafting non-disclosure agreements between private businesses.
@@ -297,6 +345,9 @@ export const getUnstructuredDraftChat = createServerFn({ method: "POST" })
           id: message.id,
           role: saved["role"],
           content: saved["content"],
+          ...(saved["status"] === "streaming" || saved["status"] === "complete"
+            ? { status: saved["status"] }
+            : {}),
           ...(typeof saved["contractText"] === "string"
             ? { contractText: saved["contractText"] }
             : {}),
@@ -307,11 +358,12 @@ export const getUnstructuredDraftChat = createServerFn({ method: "POST" })
 
 export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { chatId: string; message: string }) =>
+  .inputValidator((d: { chatId: string; message: string; userMessageId: string }) =>
     z
       .object({
         chatId: documentId,
         message: z.string().trim().min(1).max(8000),
+        userMessageId: z.string().uuid(),
       })
       .parse(d),
   )
@@ -325,7 +377,7 @@ export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
     if (!chatSnapshot.exists) throw new Error("Drafting conversation not found");
 
     const messages = chatRef.collection("messages");
-    const userMessageRef = messages.doc();
+    const userMessageRef = messages.doc(data.userMessageId);
     const userMessage = {
       role: "user",
       content: data.message,
@@ -333,18 +385,13 @@ export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
     };
     const [historySnapshot] = await Promise.all([
       messages.orderBy("createdAt").get(),
-      userMessageRef.set(userMessage),
+      userMessageRef.create(userMessage),
     ]);
 
     const savedMessages = historySnapshot.docs.filter((message) => {
       if (message.id === userMessageRef.id) return false;
       const saved = message.data();
-      return !(
-        saved["role"] === "assistant" &&
-        saved["status"] === "streaming" &&
-        typeof saved["content"] === "string" &&
-        !saved["content"].trim()
-      );
+      return !(saved["role"] === "assistant" && saved["status"] === "streaming");
     });
     const latestContract = [...savedMessages]
       .reverse()
@@ -373,26 +420,35 @@ export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
     }
     contents.push({ role: "user", parts: [{ text: data.message }] });
 
-    const response = await generateGeminiText(UNSTRUCTURED_DRAFT_SYSTEM, contents);
-    const { reply, contractText } = parseUnstructuredDraftResponse(response);
-    if (!reply && !contractText) {
-      throw new Error("The AI returned an empty response. Please try again.");
-    }
-    const now = new Date().toISOString();
-    const batch = context.adminDb.batch();
     const assistantMessageRef = messages.doc();
-    batch.create(assistantMessageRef, {
+    await assistantMessageRef.create({
       role: "assistant",
-      content: reply,
-      ...(contractText ? { contractText } : {}),
-      createdAt: now,
+      content: "",
+      status: "streaming",
+      createdAt: new Date().toISOString(),
     });
-    const update: { updatedAt: string; title?: string } = { updatedAt: now };
-    if (chatSnapshot.data()?.["title"] === "New conversation") {
-      update.title = data.message.slice(0, 60);
-    }
-    batch.update(chatRef, update);
-    await batch.commit();
+
+    const { reply, contractText } = await streamUnstructuredDraftResponse(
+      generateGeminiTextStream,
+      UNSTRUCTURED_DRAFT_SYSTEM,
+      contents,
+      assistantMessageRef,
+      async (parsed) => {
+        const now = new Date().toISOString();
+        const batch = context.adminDb.batch();
+        batch.update(assistantMessageRef, {
+          content: parsed.reply,
+          contractText: parsed.contractText ?? FieldValue.delete(),
+          status: "complete",
+        });
+        const update: { updatedAt: string; title?: string } = { updatedAt: now };
+        if (chatSnapshot.data()?.["title"] === "New conversation") {
+          update.title = data.message.slice(0, 60);
+        }
+        batch.update(chatRef, update);
+        await batch.commit();
+      },
+    );
 
     return { reply, contractText, messageId: assistantMessageRef.id };
   });

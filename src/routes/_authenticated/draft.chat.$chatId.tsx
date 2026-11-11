@@ -19,6 +19,12 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  hasAssistantCompletionForUser,
+  subscribeToDraftChatMessages,
+  upsertDraftChatMessage,
+  type DraftChatMessage,
+} from "@/lib/draft-chat-messages";
+import {
   createUnstructuredDraftChat,
   getUnstructuredDraftChat,
   saveUnstructuredDraftContract,
@@ -38,14 +44,6 @@ export const Route = createFileRoute("/_authenticated/draft/chat/$chatId")({
   }),
   component: DraftChat,
 });
-
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  contractText?: string;
-  status?: "streaming" | "complete";
-};
 
 const WELCOME_MESSAGE = `Hello! I'm Contraza AI Assistant. I can help you understand contracts, explain legal clauses, discuss contract requirements, and draft complete contracts through conversation.
 
@@ -116,7 +114,7 @@ function downloadBlob(blob: Blob, filename: string) {
 function DraftChat() {
   const { chatId } = Route.useParams();
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<DraftChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -125,15 +123,18 @@ function DraftChat() {
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const hasLiveMessages = useRef(false);
+  const activeUserMessageId = useRef<string | null>(null);
 
   useEffect(() => {
+    hasLiveMessages.current = false;
     let cancelled = false;
     void (async () => {
       try {
         const chat = await getUnstructuredDraftChat({ data: { chatId } });
         if (cancelled) return;
         setChatExists(true);
-        setMessages(chat.messages);
+        if (!hasLiveMessages.current) setMessages(chat.messages);
         inputRef.current?.focus();
       } catch (error) {
         if (!cancelled) {
@@ -149,6 +150,22 @@ function DraftChat() {
   }, [chatId]);
 
   useEffect(() => {
+    return subscribeToDraftChatMessages(
+      chatId,
+      (snapshotMessages) => {
+        hasLiveMessages.current = true;
+        setMessages(snapshotMessages);
+        const userMessageId = activeUserMessageId.current;
+        if (userMessageId && hasAssistantCompletionForUser(snapshotMessages, userMessageId)) {
+          activeUserMessageId.current = null;
+          setPending(false);
+        }
+      },
+      (error) => toast.error(error.message || "Could not receive live drafting updates."),
+    );
+  }, [chatId]);
+
+  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, pending]);
 
@@ -156,26 +173,34 @@ function DraftChat() {
     const message = text.trim();
     if (!message || pending || !chatExists) return;
     setInput("");
+    const userMessageId = crypto.randomUUID();
+    activeUserMessageId.current = userMessageId;
     setMessages((current) => [
       ...current,
-      { id: crypto.randomUUID(), role: "user", content: message },
+      { id: userMessageId, role: "user", content: message },
     ]);
     setPending(true);
     try {
-      const result = await sendUnstructuredDraftMessage({ data: { chatId, message } });
-      setMessages((current) => [
-        ...current,
-        {
+      const result = await sendUnstructuredDraftMessage({
+        data: { chatId, message, userMessageId },
+      });
+      setMessages((current) => {
+        const assistantMessage: DraftChatMessage = {
           id: result.messageId,
           role: "assistant",
           content: result.reply,
+          status: "complete",
           ...(result.contractText ? { contractText: result.contractText } : {}),
-        },
-      ]);
+        };
+        return upsertDraftChatMessage(current, assistantMessage);
+      });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not send your message.");
-      setInput(message);
+      if (activeUserMessageId.current === userMessageId) {
+        toast.error(error instanceof Error ? error.message : "Could not send your message.");
+        setInput(message);
+      }
     } finally {
+      if (activeUserMessageId.current === userMessageId) activeUserMessageId.current = null;
       setPending(false);
       inputRef.current?.focus();
     }
@@ -231,12 +256,14 @@ function DraftChat() {
     });
   }
 
-  function startEditing(message: Message) {
+  function startEditing(message: DraftChatMessage) {
+    if (pending || message.status === "streaming") return;
     setEditingContractId(message.id);
     setEditValue(message.contractText ?? "");
   }
 
   async function saveEditedContract(messageId: string) {
+    if (pending) return;
     try {
       const result = await saveUnstructuredDraftContract({
         data: { chatId, messageId, contractText: editValue },
@@ -333,6 +360,11 @@ function DraftChat() {
               >
                 {message.role === "assistant" ? (
                   <>
+                    {message.status === "streaming" && (
+                      <p className="mb-2 text-xs text-muted-foreground" role="status">
+                        Contraza AI Assistant is draftingâ€¦
+                      </p>
+                    )}
                     {message.content && (
                       <div className="chat-md rounded-xl border bg-paper px-4 py-3 text-sm shadow-sm">
                         <ReactMarkdown>{message.content}</ReactMarkdown>
@@ -353,7 +385,7 @@ function DraftChat() {
                             <div className="flex gap-2">
                               <Button
                                 size="sm"
-                                disabled={!editValue.trim()}
+                                disabled={pending || message.status === "streaming" || !editValue.trim()}
                                 onClick={() => void saveEditedContract(message.id)}
                               >
                                 <Check />
@@ -362,6 +394,7 @@ function DraftChat() {
                               <Button
                                 size="sm"
                                 variant="outline"
+                                disabled={pending || message.status === "streaming"}
                                 onClick={() => {
                                   setEditingContractId(null);
                                   setEditValue("");
@@ -404,6 +437,7 @@ function DraftChat() {
                               <Button
                                 size="sm"
                                 variant="ghost"
+                                disabled={pending || message.status === "streaming"}
                                 onClick={() => startEditing(message)}
                               >
                                 <Pencil />
@@ -412,7 +446,7 @@ function DraftChat() {
                               <Button
                                 size="sm"
                                 variant="ghost"
-                                disabled={pending}
+                                disabled={pending || message.status === "streaming"}
                                 onClick={() =>
                                   void sendMessage(
                                     "Regenerate the contract based on our confirmed requirements. Use the existing contract as the baseline and preserve all requirements.",
@@ -439,6 +473,7 @@ function DraftChat() {
                           <Textarea
                             value={editValue}
                             onChange={(event) => setEditValue(event.target.value)}
+                            disabled={pending || message.status === "streaming"}
                             className="no-print min-h-[50vh] bg-background font-mono text-sm"
                             aria-label="Edit generated contract"
                           />
@@ -456,7 +491,7 @@ function DraftChat() {
               </div>
             </article>
           ))}
-          {pending && (
+          {pending && !messages.some((message) => message.status === "streaming") && (
             <div className="flex gap-3" role="status" aria-live="polite">
               <span className="grid h-8 w-8 place-items-center rounded-full border-2 border-seal font-serif text-xs text-seal">
                 C
