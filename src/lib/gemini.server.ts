@@ -24,6 +24,9 @@ const responseSchema = z.object({
 const MODEL_FALLBACKS = ["gemini-3.8-flash", "gemini-3.6-flash"] as const;
 const MAX_503_RETRIES = 2;
 const MAX_RETRY_AFTER_MS = 5_000;
+const MAX_RATE_LIMIT_BACKOFF_MS = 30_000;
+const MAX_STREAM_NETWORK_RETRIES = 1;
+const DEFAULT_GEMINI_STREAM_TIMEOUT_MS = 120_000;
 const GEMINI_REQUEST_TIMEOUT_MS = 120_000;
 
 type GeminiDiagnostics = { requestId?: string };
@@ -46,9 +49,62 @@ function retryDelayMs(retryAfter: string | null, retryNumber: number) {
   return Math.min(1_000 * 2 ** (retryNumber - 1), MAX_RETRY_AFTER_MS);
 }
 
-function classifyFetchFailure(error: unknown) {
-  if (error instanceof Error && error.name === "TimeoutError") return "timeout";
-  if (error instanceof Error && error.name === "AbortError") return "aborted";
+function streamRetryDelayMs(retryAfter: string | null, retryNumber: number, maxDelayMs: number) {
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const retryAt = Number.isFinite(seconds)
+      ? seconds * 1_000
+      : Date.parse(retryAfter) - Date.now();
+    if (Number.isFinite(retryAt) && retryAt >= 0) {
+      const baseDelay = Math.min(retryAt, maxDelayMs);
+      const positiveJitter = Math.random() * Math.min(1_000, maxDelayMs - baseDelay);
+      return Math.min(Math.round(baseDelay + positiveJitter), maxDelayMs);
+    }
+  }
+  const exponential = Math.min(500 * 2 ** (retryNumber - 1), maxDelayMs);
+  return Math.round(exponential * (0.5 + Math.random() * 0.5));
+}
+
+function geminiStreamTimeoutMs() {
+  const configured = Number(process.env["GEMINI_STREAM_TIMEOUT_MS"]);
+  if (Number.isInteger(configured) && configured >= 1_000 && configured <= 900_000) {
+    return configured;
+  }
+  return DEFAULT_GEMINI_STREAM_TIMEOUT_MS;
+}
+
+function classifyFetchFailure(error: unknown, signal?: AbortSignal) {
+  const errorCode =
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : typeof error === "object" &&
+          error !== null &&
+          "cause" in error &&
+          typeof error.cause === "object" &&
+          error.cause !== null &&
+          "code" in error.cause
+        ? String(error.cause.code)
+        : undefined;
+  const errorName =
+    typeof error === "object" && error !== null && "name" in error ? String(error.name) : undefined;
+  if (signal?.aborted) {
+    const reason = signal.reason;
+    const reasonName =
+      typeof reason === "object" && reason !== null && "name" in reason
+        ? String(reason.name)
+        : undefined;
+    if (reasonName === "TimeoutError") return "timeout";
+    if (reasonName === "AbortError") return "aborted";
+  }
+  if (errorName === "TimeoutError") return "timeout";
+  if (errorName === "AbortError") return "aborted";
+  if (
+    ["ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(
+      errorCode ?? "",
+    )
+  ) {
+    return errorCode === "ETIMEDOUT" ? "timeout" : "network_error";
+  }
   if (error instanceof TypeError) return "network_error";
   return "fetch_error";
 }
@@ -104,7 +160,11 @@ export async function generateGeminiText(
           requestMs: Date.now() - attemptStartedAt,
           attempt: attempt + 1,
           requestBodyBytes,
-          failureCategory: response.ok ? "none" : response.status === 503 ? "gemini_overloaded" : "gemini_http_error",
+          failureCategory: response.ok
+            ? "none"
+            : response.status === 503
+              ? "gemini_overloaded"
+              : "gemini_http_error",
         });
       } catch (error) {
         logGeminiMetric({
@@ -179,7 +239,8 @@ export async function generateGeminiText(
       attempt: selectedAttempt,
       requestBodyBytes,
       totalMs: Date.now() - startedAt,
-      failureCategory: classifyFetchFailure(error) === "timeout" ? "response_timeout" : "response_body_error",
+      failureCategory:
+        classifyFetchFailure(error) === "timeout" ? "response_timeout" : "response_body_error",
     });
     throw new Error("Gemini returned an unreadable response.", { cause: error });
   }
@@ -281,28 +342,73 @@ export async function generateGeminiTextStream(
   let firstTextAt: number | null = null;
   let response: Response | undefined;
   let selectedAttempt = 0;
+  let activeTimeout: ReturnType<typeof setTimeout> | undefined;
+  let activeSignal: AbortSignal | undefined;
+  let lastTransientFailure:
+    { model: string; attempt: number; status: number | null; category: string } | undefined;
+  const clearActiveTimeout = () => {
+    if (activeTimeout !== undefined) clearTimeout(activeTimeout);
+    activeTimeout = undefined;
+  };
   for (const model of MODEL_FALLBACKS) {
     selectedModel = model;
-    for (let attempt = 0; attempt <= MAX_503_RETRIES; attempt += 1) {
-      selectedAttempt = attempt + 1;
+    let networkRetries = 0;
+    let tryFallbackModel = false;
+    for (let attempt = 1; attempt <= MAX_503_RETRIES + 1; attempt += 1) {
+      selectedAttempt = attempt;
       const attemptStartedAt = Date.now();
+      const controller = new AbortController();
+      const timeoutMs = geminiStreamTimeoutMs();
+      const attemptTimeout = setTimeout(
+        () => controller.abort(new DOMException("Gemini stream request timed out", "TimeoutError")),
+        timeoutMs,
+      );
       try {
         response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
-          request,
+          { ...request, signal: controller.signal },
         );
       } catch (error) {
+        clearTimeout(attemptTimeout);
+        response = undefined;
+        const failureCategory = classifyFetchFailure(error, controller.signal);
         logGeminiMetric({
           requestId,
           operation: "streamGenerateContent",
           model,
           status: null,
           requestMs: Date.now() - attemptStartedAt,
-          attempt: attempt + 1,
+          attempt,
           requestBodyBytes,
-          failureCategory: classifyFetchFailure(error),
+          failureCategory,
         });
-        throw error;
+        if (
+          failureCategory !== "network_error" &&
+          failureCategory !== "timeout" &&
+          failureCategory !== "aborted"
+        ) {
+          throw new Error("Gemini rejected the streaming request before it started.", {
+            cause: error,
+          });
+        }
+        lastTransientFailure = { model, attempt, status: null, category: failureCategory };
+        if (networkRetries < MAX_STREAM_NETWORK_RETRIES) {
+          networkRetries += 1;
+          const delayMs = streamRetryDelayMs(null, networkRetries, MAX_RETRY_AFTER_MS);
+          logGeminiMetric({
+            requestId,
+            operation: "streamGenerateContent",
+            model,
+            status: null,
+            attempt,
+            retryDelayMs: delayMs,
+            failureCategory: `${failureCategory}_retry`,
+          });
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        tryFallbackModel = true;
+        break;
       }
       logGeminiMetric({
         requestId,
@@ -310,39 +416,87 @@ export async function generateGeminiTextStream(
         model,
         status: response.status,
         requestMs: Date.now() - attemptStartedAt,
-        attempt: attempt + 1,
+        attempt,
         requestBodyBytes,
-        failureCategory: response.ok ? "none" : response.status === 503 ? "gemini_overloaded" : "gemini_http_error",
+        failureCategory: response.ok
+          ? "none"
+          : response.status === 503
+            ? "gemini_overloaded"
+            : response.status === 429
+              ? "gemini_rate_limited"
+              : "gemini_http_error",
       });
-      if (response.status !== 503) break;
-      if (attempt < MAX_503_RETRIES) {
-        const delayMs = retryDelayMs(response?.headers.get("retry-after") ?? null, attempt + 1);
-        logGeminiMetric({
-          requestId,
-          operation: "streamGenerateContent",
-          model,
-          status: response.status,
-          attempt: attempt + 1,
-          retryDelayMs: delayMs,
-          failureCategory: "gemini_overloaded_retry",
-        });
-        await new Promise((resolve) =>
-          setTimeout(resolve, delayMs),
-        );
+      const retryableStatus = response.status === 503 || response.status === 429;
+      if (retryableStatus) {
+        clearTimeout(attemptTimeout);
+        const category = response.status === 429 ? "gemini_rate_limited" : "gemini_overloaded";
+        lastTransientFailure = { model, attempt, status: response.status, category };
+        if (attempt <= MAX_503_RETRIES) {
+          const delayMs = streamRetryDelayMs(
+            response.headers.get("retry-after"),
+            attempt,
+            response.status === 429 ? MAX_RATE_LIMIT_BACKOFF_MS : MAX_RETRY_AFTER_MS,
+          );
+          logGeminiMetric({
+            requestId,
+            operation: "streamGenerateContent",
+            model,
+            status: response.status,
+            attempt,
+            retryDelayMs: delayMs,
+            failureCategory: `${category}_retry`,
+          });
+          const retryResponse = response;
+          response = undefined;
+          try {
+            await (retryResponse.body?.cancel() ?? Promise.resolve());
+          } catch {
+            // The bounded retry should proceed even if the error body cannot be cancelled.
+          }
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+        response = undefined;
+        tryFallbackModel = true;
+        break;
       }
+
+      activeTimeout = attemptTimeout;
+      activeSignal = controller.signal;
+      selectedAttempt = attempt;
+      break;
     }
-    if (response?.status !== 503) break;
+    if (activeSignal) break;
+    if (tryFallbackModel) continue;
   }
   if (!response) {
+    const failure = lastTransientFailure;
+    const failureCategory = failure?.category ?? "no_response";
     logGeminiMetric({
       requestId,
       operation: "streamGenerateContent",
-      model: selectedModel,
-      status: null,
-      attempt: selectedAttempt,
-      failureCategory: "no_response",
+      model: failure?.model ?? selectedModel,
+      status: failure?.status ?? null,
+      attempt: failure?.attempt ?? selectedAttempt,
       totalMs: Date.now() - startedAt,
+      failureCategory: `${failureCategory}_all_models_exhausted`,
     });
+    if (failure?.status === 429) {
+      throw new Error(
+        "Gemini rate limit reached after bounded retries. Please wait before trying again.",
+      );
+    }
+    if (failure?.status === 503) {
+      throw new Error("Gemini is temporarily overloaded after bounded retries. Please try again.");
+    }
+    if (failure?.category === "timeout") {
+      throw new Error(
+        "Gemini did not respond before the configured timeout on the available models. Please try again.",
+      );
+    }
+    if (failure?.category === "network_error" || failure?.category === "aborted") {
+      throw new Error("The connection to Gemini failed after bounded retries. Please try again.");
+    }
     throw new Error("Gemini request did not return a response.");
   }
   if (!response.ok) {
@@ -355,7 +509,17 @@ export async function generateGeminiTextStream(
       if (error instanceof Error && error.name !== "SyntaxError") {
         throw new Error("Gemini returned an unreadable error response.", { cause: error });
       }
+    } finally {
+      clearActiveTimeout();
     }
+    const failureCategory =
+      response.status === 400
+        ? "gemini_invalid_request"
+        : response.status === 401 || response.status === 403
+          ? "gemini_auth_error"
+          : response.status === 404
+            ? "gemini_model_error"
+            : "gemini_http_error";
     logGeminiMetric({
       requestId,
       operation: "streamGenerateContent",
@@ -364,11 +528,18 @@ export async function generateGeminiTextStream(
       attempt: selectedAttempt,
       requestBodyBytes,
       totalMs: Date.now() - startedAt,
-      failureCategory: response.status === 503 ? "gemini_http_503_exhausted" : "gemini_http_error",
+      failureCategory,
     });
+    if (failureCategory === "gemini_auth_error") {
+      throw new Error("Gemini authentication failed. Check the server API key and permissions.");
+    }
+    if (failureCategory === "gemini_invalid_request") {
+      throw new Error(`Gemini rejected the request (400): ${message}`);
+    }
     throw new Error(`Gemini request failed (${response.status}): ${message}`);
   }
   if (!response.body) {
+    clearActiveTimeout();
     logGeminiMetric({
       requestId,
       operation: "streamGenerateContent",
@@ -460,6 +631,7 @@ export async function generateGeminiTextStream(
       if (buffer) await processLine(buffer);
       if (eventData) await processData(eventData);
     } catch (error) {
+      const streamFailureCategory = classifyFetchFailure(error, activeSignal);
       logGeminiMetric({
         requestId,
         operation: "streamGenerateContent",
@@ -468,12 +640,36 @@ export async function generateGeminiTextStream(
         attempt: selectedAttempt,
         requestBodyBytes,
         totalMs: Date.now() - startedAt,
-        failureCategory: failurePhase === "stream_callback" ? "stream_callback_error" : "stream_read_error",
+        failureCategory:
+          failurePhase === "stream_callback"
+            ? "stream_callback_error"
+            : streamFailureCategory === "network_error"
+              ? "stream_network_error"
+              : streamFailureCategory === "timeout"
+                ? "stream_timeout"
+                : streamFailureCategory === "aborted"
+                  ? "stream_aborted"
+                  : "stream_read_error",
       });
+      if (failurePhase !== "stream_callback" && streamFailureCategory === "timeout") {
+        throw new Error("Gemini timed out while streaming the response. Please try again.", {
+          cause: error,
+        });
+      }
+      if (
+        failurePhase !== "stream_callback" &&
+        (streamFailureCategory === "network_error" || streamFailureCategory === "aborted")
+      ) {
+        throw new Error(
+          "The Gemini connection was interrupted while streaming. Please try again.",
+          { cause: error },
+        );
+      }
       throw error;
     }
   } finally {
     reader.releaseLock();
+    clearActiveTimeout();
   }
 
   const completeText = text.trim();

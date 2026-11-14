@@ -53,7 +53,9 @@ function AuthPage() {
       }
       toast.success(mode === "in" ? "Signed in" : "Account created");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Authentication failed. Please try again.");
+      toast.error(
+        error instanceof Error ? error.message : "Authentication failed. Please try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -64,7 +66,9 @@ function AuthPage() {
     try {
       await signInWithPopup(getFirebaseAuth(), new GoogleAuthProvider());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Google sign-in failed. Please try again.");
+      toast.error(
+        error instanceof Error ? error.message : "Google sign-in failed. Please try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -80,9 +84,13 @@ function AuthPage() {
     setBusy(true);
     try {
       await sendPasswordResetEmail(getFirebaseAuth(), recipient);
-      toast.success("If an account exists for that email, Firebase will send a password reset link.");
+      toast.success(
+        "If an account exists for that email, Firebase will send a password reset link.",
+      );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not send the password reset email.");
+      toast.error(
+        error instanceof Error ? error.message : "Could not send the password reset email.",
+      );
     } finally {
       setBusy(false);
     }
@@ -92,15 +100,30 @@ function AuthPage() {
     <div className="grid min-h-screen place-items-center px-4">
       <div className="paper-sheet w-full max-w-sm rounded-md border p-8">
         <Logo />
-        <h1 className="mt-6 text-2xl font-semibold">{mode === "in" ? "Sign in" : "Create account"}</h1>
+        <h1 className="mt-6 text-2xl font-semibold">
+          {mode === "in" ? "Sign in" : "Create account"}
+        </h1>
         <form onSubmit={submit} className="mt-6 space-y-3">
           <div>
             <Label htmlFor="email">Email</Label>
-            <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
           <div>
             <Label htmlFor="pw">Password</Label>
-            <Input id="pw" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
+            <Input
+              id="pw"
+              type="password"
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
           </div>
           {mode === "in" && (
             <div className="flex justify-end">
@@ -123,7 +146,13 @@ function AuthPage() {
           <span>or</span>
           <span className="h-px flex-1 bg-border" />
         </div>
-        <Button type="button" variant="outline" className="w-full" onClick={signInWithGoogle} disabled={busy}>
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={signInWithGoogle}
+          disabled={busy}
+        >
           Continue with Google
         </Button>
         <button

@@ -14,6 +14,8 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { DeleteContractButton } from "@/components/DeleteContractButton";
+import { RenameConversationButton } from "@/components/RenameConversationButton";
+import { renameReviewThread } from "@/lib/lease.functions";
 
 export const Route = createFileRoute("/_authenticated/review")({
   head: () => ({
@@ -23,7 +25,10 @@ export const Route = createFileRoute("/_authenticated/review")({
       { property: "og:title", content: "Review — Contraza" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { property: "og:description", content: "Ask questions about commercial lease agreements and NDAs." },
+      {
+        property: "og:description",
+        content: "Ask questions about commercial lease agreements and NDAs.",
+      },
     ],
   }),
   component: ReviewLayout,
@@ -32,7 +37,9 @@ export const Route = createFileRoute("/_authenticated/review")({
 const threadsQuery = {
   queryKey: ["threads"],
   queryFn: async () => {
-    const snapshot = await getDocs(query(userCollection("reviewThreads"), orderBy("updatedAt", "desc")));
+    const snapshot = await getDocs(
+      query(userCollection("reviewThreads"), orderBy("updatedAt", "desc")),
+    );
     return snapshot.docs.map((thread) => ({ id: thread.id, ...thread.data() }));
   },
 };
@@ -60,6 +67,11 @@ function ReviewLayout() {
     }
   }
 
+  async function rename(id: string, title: string) {
+    await renameReviewThread({ data: { threadId: id, title } });
+    await refetch();
+  }
+
   return (
     <div className="grid h-[calc(100dvh-4rem)] w-full grid-cols-1 overflow-hidden md:grid-cols-[280px_minmax(0,1fr)]">
       <aside className="hidden min-h-0 flex-col border-r bg-paper/80 md:flex">
@@ -67,6 +79,7 @@ function ReviewLayout() {
           conversations={data ?? []}
           pathname={pathname}
           onCreate={create}
+          onRename={rename}
           onNavigate={() => setMobileSidebarOpen(false)}
           onDeleted={(id) => {
             if (pathname === `/review/${id}`) void navigate({ to: "/review" });
@@ -91,6 +104,7 @@ function ReviewLayout() {
                 conversations={data ?? []}
                 pathname={pathname}
                 onCreate={create}
+                onRename={rename}
                 onNavigate={() => setMobileSidebarOpen(false)}
                 onDeleted={(id) => {
                   if (pathname === `/review/${id}`) void navigate({ to: "/review" });
@@ -115,12 +129,14 @@ function ConversationSidebar({
   conversations,
   pathname,
   onCreate,
+  onRename,
   onNavigate,
   onDeleted,
 }: {
   conversations: Conversation[];
   pathname: string;
   onCreate: () => void;
+  onRename: (id: string, title: string) => Promise<void>;
   onNavigate: () => void;
   onDeleted: (id: string) => void;
 }) {
@@ -156,6 +172,10 @@ function ConversationSidebar({
               >
                 {conversation.title}
               </Link>
+              <RenameConversationButton
+                title={conversation.title}
+                onRename={(title) => onRename(conversation.id, title)}
+              />
               <DeleteContractButton
                 id={conversation.id}
                 title={conversation.title}

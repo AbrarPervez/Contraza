@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ArrowLeft, MessageSquarePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { RenameConversationButton } from "@/components/RenameConversationButton";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -16,6 +17,7 @@ import {
   createUnstructuredDraftChat,
   deleteUnstructuredDraftChat,
   listUnstructuredDraftChats,
+  renameUnstructuredDraftChat,
 } from "@/lib/lease.functions";
 
 export const Route = createFileRoute("/_authenticated/draft/chat")({
@@ -79,6 +81,11 @@ function DraftChatList() {
     }
   }
 
+  async function renameChat(id: string, title: string) {
+    await renameUnstructuredDraftChat({ data: { chatId: id, title } });
+    await queryClient.invalidateQueries({ queryKey: ["draftChats"] });
+  }
+
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
       <Link
@@ -119,6 +126,10 @@ function DraftChatList() {
                 {new Date(chat.updatedAt).toLocaleString()}
               </span>
             </Link>
+            <RenameConversationButton
+              title={chat.title}
+              onRename={(title) => renameChat(chat.id, title)}
+            />
             <Button
               variant="ghost"
               size="icon"

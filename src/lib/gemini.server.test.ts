@@ -4,7 +4,24 @@ import { generateGeminiText, generateGeminiTextStream } from "./gemini.server";
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+function streamResponse(...texts: string[]) {
+  const chunks = texts.map(
+    (text) => `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] })}\n\n`,
+  );
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        chunks.forEach((chunk) => controller.enqueue(new TextEncoder().encode(chunk)));
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
 
 describe("generateGeminiText", () => {
   it("uses the server key and returns generated text", async () => {
@@ -167,21 +184,7 @@ describe("generateGeminiText", () => {
 
   it("streams text chunks without changing the model or output budget", async () => {
     vi.stubEnv("GEMINI_API_KEY", "server-secret");
-    const chunks = [
-      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "First " }] } }] })}\n\n`,
-      `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "second" }] } }] })}\n\n`,
-    ];
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            chunks.forEach((chunk) => controller.enqueue(new TextEncoder().encode(chunk)));
-            controller.close();
-          },
-        }),
-        { status: 200, headers: { "content-type": "text/event-stream" } },
-      ),
-    );
+    const fetchMock = vi.fn().mockResolvedValue(streamResponse("First ", "second"));
     vi.stubGlobal("fetch", fetchMock);
     const onText = vi.fn().mockResolvedValue(undefined);
 
@@ -193,7 +196,7 @@ describe("generateGeminiText", () => {
     expect(onText).toHaveBeenNthCalledWith(2, "First second");
     expect(fetchMock.mock.calls[0]?.[0]).toContain(":streamGenerateContent?alt=sse");
     const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(request.signal).toBeUndefined();
+    expect(request.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(String(request.body))).toMatchObject({
       generationConfig: {
         maxOutputTokens: 8192,
@@ -230,5 +233,157 @@ describe("generateGeminiText", () => {
 
     expect(onText).toHaveBeenNthCalledWith(1, "Visible ");
     expect(onText).toHaveBeenNthCalledWith(2, "Visible response");
+  });
+
+  it("retries a transient pre-header network failure and falls back to the next model", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubEnv("GEMINI_API_KEY", "server-secret");
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("connection reset"))
+      .mockRejectedValueOnce(new TypeError("connection reset"))
+      .mockResolvedValueOnce(streamResponse("Fallback answer"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generation = generateGeminiTextStream(
+      "system",
+      [{ role: "user", parts: [{ text: "question" }] }],
+      vi.fn().mockResolvedValue(undefined),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(generation).resolves.toBe("Fallback answer");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/models/gemini-3.8-flash:");
+    expect(fetchMock.mock.calls[2]?.[0]).toContain("/models/gemini-3.6-flash:");
+  });
+
+  it("aborts each streaming attempt at the configured timeout and uses the fallback model", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubEnv("GEMINI_API_KEY", "server-secret");
+    vi.stubEnv("GEMINI_STREAM_TIMEOUT_MS", "1000");
+    const waitForAbort = (_url: string, request: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => reject(request.signal?.reason), {
+          once: true,
+        });
+      });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(waitForAbort)
+      .mockImplementationOnce(waitForAbort)
+      .mockResolvedValueOnce(streamResponse("Fallback after timeout"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generation = generateGeminiTextStream(
+      "system",
+      [{ role: "user", parts: [{ text: "question" }] }],
+      vi.fn().mockResolvedValue(undefined),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(generation).resolves.toBe("Fallback after timeout");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const [, request] of fetchMock.mock.calls) {
+      expect((request as RequestInit).signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("backs off and retries HTTP 429 without retrying a permanent authentication error", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubEnv("GEMINI_API_KEY", "server-secret");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "Rate limited" } }), {
+          status: 429,
+          headers: { "Retry-After": "0" },
+        }),
+      )
+      .mockResolvedValueOnce(streamResponse("Recovered"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generation = generateGeminiTextStream(
+      "system",
+      [{ role: "user", parts: [{ text: "question" }] }],
+      vi.fn().mockResolvedValue(undefined),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(generation).resolves.toBe("Recovered");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    fetchMock
+      .mockReset()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "Invalid API key" } }), { status: 401 }),
+      );
+    await expect(
+      generateGeminiTextStream(
+        "system",
+        [{ role: "user", parts: [{ text: "question" }] }],
+        vi.fn().mockResolvedValue(undefined),
+      ),
+    ).rejects.toThrow("Gemini authentication failed");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("preserves HTTP 503 retries and fallback for streaming requests", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubEnv("GEMINI_API_KEY", "server-secret");
+    const overloaded = () =>
+      new Response(JSON.stringify({ error: { message: "Temporarily overloaded" } }), {
+        status: 503,
+        headers: { "Retry-After": "0" },
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(overloaded())
+      .mockResolvedValueOnce(overloaded())
+      .mockResolvedValueOnce(overloaded())
+      .mockResolvedValueOnce(streamResponse("Fallback stream"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generation = generateGeminiTextStream(
+      "system",
+      [{ role: "user", parts: [{ text: "question" }] }],
+      vi.fn().mockResolvedValue(undefined),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(generation).resolves.toBe("Fallback stream");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[3]?.[0]).toContain("/models/gemini-3.6-flash:");
+  });
+
+  it("does not retry a stream after partial output has arrived", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "server-secret");
+    const chunk = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: "Partial" }] } }] })}\n\n`;
+    let pullCount = 0;
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (pullCount++ === 0) {
+              controller.enqueue(new TextEncoder().encode(chunk));
+              return;
+            }
+            controller.error(new TypeError("connection reset"));
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onText = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      generateGeminiTextStream("system", [{ role: "user", parts: [{ text: "question" }] }], onText),
+    ).rejects.toThrow("Gemini connection was interrupted while streaming");
+    expect(onText).toHaveBeenCalledWith("Partial");
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

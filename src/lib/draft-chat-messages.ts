@@ -1,5 +1,8 @@
 import { onSnapshot, orderBy, query } from "firebase/firestore";
-import { draftChatMessagesCollection, type DraftChatMessageData } from "@/integrations/firebase/data";
+import {
+  draftChatMessagesCollection,
+  type DraftChatMessageData,
+} from "@/integrations/firebase/data";
 
 export type DraftChatMessage = {
   id: string;
@@ -54,10 +57,7 @@ export function upsertDraftChatMessage(
   return messages.map((message) => (message.id === incoming.id ? incoming : message));
 }
 
-export function hasAssistantCompletionForUser(
-  messages: DraftChatMessage[],
-  userMessageId: string,
-) {
+export function hasAssistantCompletionForUser(messages: DraftChatMessage[], userMessageId: string) {
   const userIndex = messages.findIndex(
     (message) => message.id === userMessageId && message.role === "user",
   );
@@ -103,7 +103,9 @@ export function subscribeToDraftChatMessages(
         scheduleRetry,
       );
     } catch (error) {
-      scheduleRetry(error instanceof Error ? error : new Error("Could not subscribe to draft chat."));
+      scheduleRetry(
+        error instanceof Error ? error : new Error("Could not subscribe to draft chat."),
+      );
     }
   }
 

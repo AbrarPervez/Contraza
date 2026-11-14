@@ -27,10 +27,9 @@ function getFirebaseAdminApp() {
     try {
       serviceAccountJson = JSON.parse(readFileSync(serviceAccountFile, "utf8"));
     } catch (error) {
-      throw new Error(
-        `Could not read Firebase service-account file at "${serviceAccountFile}".`,
-        { cause: error },
-      );
+      throw new Error(`Could not read Firebase service-account file at "${serviceAccountFile}".`, {
+        cause: error,
+      });
     }
 
     const serviceAccount = serviceAccountSchema.parse(serviceAccountJson);

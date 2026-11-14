@@ -175,10 +175,7 @@ function DraftChat() {
     setInput("");
     const userMessageId = crypto.randomUUID();
     activeUserMessageId.current = userMessageId;
-    setMessages((current) => [
-      ...current,
-      { id: userMessageId, role: "user", content: message },
-    ]);
+    setMessages((current) => [...current, { id: userMessageId, role: "user", content: message }]);
     setPending(true);
     try {
       const result = await sendUnstructuredDraftMessage({
@@ -385,7 +382,9 @@ function DraftChat() {
                             <div className="flex gap-2">
                               <Button
                                 size="sm"
-                                disabled={pending || message.status === "streaming" || !editValue.trim()}
+                                disabled={
+                                  pending || message.status === "streaming" || !editValue.trim()
+                                }
                                 onClick={() => void saveEditedContract(message.id)}
                               >
                                 <Check />

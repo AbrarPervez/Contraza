@@ -35,7 +35,8 @@ describe("draft chat Firestore messages", () => {
   });
 
   it("maps streaming snapshots and replaces the same assistant message on completion", () => {
-    let onSnapshotUpdate: ((snapshot: { docs: { id: string; data: () => object }[] }) => void) | undefined;
+    let onSnapshotUpdate:
+      ((snapshot: { docs: { id: string; data: () => object }[] }) => void) | undefined;
     firestore.onSnapshot.mockImplementation((_query, next) => {
       onSnapshotUpdate = next;
       return vi.fn();
@@ -56,10 +57,7 @@ describe("draft chat Firestore messages", () => {
         { id: "assistant-1", data: () => streamingAssistant },
       ],
     });
-    expect(updates).toHaveBeenLastCalledWith([
-      { ...userMessage },
-      { ...streamingAssistant },
-    ]);
+    expect(updates).toHaveBeenLastCalledWith([{ ...userMessage }, { ...streamingAssistant }]);
 
     const completedAssistant = {
       ...streamingAssistant,
@@ -74,10 +72,7 @@ describe("draft chat Firestore messages", () => {
     });
     const completedMessages = updates.mock.lastCall?.[0] ?? [];
 
-    expect(completedMessages).toEqual([
-      { ...userMessage },
-      { ...completedAssistant },
-    ]);
+    expect(completedMessages).toEqual([{ ...userMessage }, { ...completedAssistant }]);
     expect(upsertDraftChatMessage(completedMessages, completedMessages[1]!)).toHaveLength(2);
     expect(hasAssistantCompletionForUser(completedMessages, "user-1")).toBe(true);
     stop();
@@ -102,7 +97,8 @@ describe("draft chat Firestore messages", () => {
   it("resubscribes after a terminal listener error so updated rules can take effect", async () => {
     vi.useFakeTimers();
     let onListenerError: ((error: Error) => void) | undefined;
-    let onSnapshotUpdate: ((snapshot: { docs: { id: string; data: () => object }[] }) => void) | undefined;
+    let onSnapshotUpdate:
+      ((snapshot: { docs: { id: string; data: () => object }[] }) => void) | undefined;
     const firstUnsubscribe = vi.fn();
     const secondUnsubscribe = vi.fn();
     firestore.onSnapshot

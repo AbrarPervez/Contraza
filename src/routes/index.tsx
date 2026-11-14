@@ -8,14 +8,16 @@ export const Route = createFileRoute("/")({
       { title: "Contraza — Draft & Review Leases and NDAs" },
       {
         name: "description",
-        content: "Structured drafting and AI-assisted review of commercial lease agreements and NDAs for private businesses.",
+        content:
+          "Structured drafting and AI-assisted review of commercial lease agreements and NDAs for private businesses.",
       },
       { property: "og:title", content: "Contraza — Draft & Review Leases and NDAs" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
       {
         property: "og:description",
-        content: "Draft commercial leases and NDAs from structured fields, or review existing agreements with AI.",
+        content:
+          "Draft commercial leases and NDAs from structured fields, or review existing agreements with AI.",
       },
     ],
   }),

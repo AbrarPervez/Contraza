@@ -37,8 +37,9 @@ describe("parseUnstructuredDraftResponse", () => {
   it("hides partial start delimiters split across stream updates", () => {
     const start = "<<<CONTRAZA_CONTRACT_START>>>";
     for (let length = 1; length < start.length; length += 1) {
-      expect(parseUnstructuredDraftResponsePartial(`Here is the draft. ${start.slice(0, length)}`))
-        .toEqual({ reply: "Here is the draft.", contractText: null });
+      expect(
+        parseUnstructuredDraftResponsePartial(`Here is the draft. ${start.slice(0, length)}`),
+      ).toEqual({ reply: "Here is the draft.", contractText: null });
     }
   });
 

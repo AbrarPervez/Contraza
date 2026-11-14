@@ -32,7 +32,16 @@ beforeEach(() => {
 });
 
 function mount(kind: "draft" | "review") {
-  return render(<QueryClientProvider client={new QueryClient()}><DeleteContractButton id="item-1" title="Test contract" kind={kind} onDeleted={mocks.deleted} /></QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DeleteContractButton
+        id="item-1"
+        title="Test contract"
+        kind={kind}
+        onDeleted={mocks.deleted}
+      />
+    </QueryClientProvider>,
+  );
 }
 
 describe("confirmed contract deletion", () => {
@@ -43,7 +52,10 @@ describe("confirmed contract deletion", () => {
     expect(mocks.deleteDoc).not.toHaveBeenCalled();
   });
 
-  it.each([["draft", "item-1"], ["review", "item-1"]] as const)("deletes the selected %s after confirmation", async (kind, id) => {
+  it.each([
+    ["draft", "item-1"],
+    ["review", "item-1"],
+  ] as const)("deletes the selected %s after confirmation", async (kind, id) => {
     mount(kind);
     fireEvent.click(screen.getByRole("button", { name: `Delete ${kind}: Test contract` }));
     fireEvent.click(screen.getByRole("button", { name: "Delete permanently" }));

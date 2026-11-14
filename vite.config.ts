@@ -13,6 +13,7 @@ const serverEnvPlugin: Plugin = {
     const env = loadEnv(mode, process.cwd(), "");
     const serverKeys = [
       "GEMINI_API_KEY",
+      "GEMINI_STREAM_TIMEOUT_MS",
       "FIREBASE_PROJECT_ID",
       "FIREBASE_SERVICE_ACCOUNT_PATH",
       "FIREBASE_CLIENT_EMAIL",
@@ -27,6 +28,9 @@ const serverEnvPlugin: Plugin = {
 
 export default defineConfig({
   plugins: [serverEnvPlugin],
+  vite: {
+    server: { port: 8080, strictPort: true },
+  },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this

@@ -66,6 +66,8 @@ function ThreadView({ threadId }: { threadId: string }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const applyingEdit = useRef(false);
+  const localContractDirty = useRef(false);
 
   useEffect(
     () =>
@@ -101,6 +103,7 @@ function ThreadView({ threadId }: { threadId: string }) {
         const contractText = thread.data()["contractText"] ?? "";
         setContract(contractText);
         setSavedContract(contractText);
+        localContractDirty.current = false;
         setShowDoc(!contractText);
         inputRef.current?.focus();
       } catch (error) {
@@ -114,6 +117,27 @@ function ThreadView({ threadId }: { threadId: string }) {
       cancelled = true;
     };
   }, [threadId]);
+
+  useEffect(
+    () =>
+      onSnapshot(
+        userDocument("reviewThreads", threadId),
+        (snapshot) => {
+          if (!snapshot.exists()) return;
+          const nextContract = snapshot.data()["contractText"];
+          if (
+            typeof nextContract === "string" &&
+            (applyingEdit.current || !localContractDirty.current)
+          ) {
+            setContract(nextContract);
+            setSavedContract(nextContract);
+            localContractDirty.current = false;
+          }
+        },
+        (error) => toast.error(error.message || "Could not receive live contract updates."),
+      ),
+    [threadId],
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -143,6 +167,7 @@ function ThreadView({ threadId }: { threadId: string }) {
         return;
       }
       setContract(text);
+      localContractDirty.current = true;
       setShowDoc(true);
       toast.success(`Loaded ${file.name} — press "Attach contract" to save it`);
     } catch {
@@ -163,6 +188,7 @@ function ThreadView({ threadId }: { threadId: string }) {
         updatedAt: new Date().toISOString(),
       });
       setSavedContract(contract);
+      localContractDirty.current = false;
       setShowDoc(false);
       toast.success("Contract attached to this review");
       inputRef.current?.focus();
@@ -175,7 +201,7 @@ function ThreadView({ threadId }: { threadId: string }) {
 
   async function send(text: string) {
     const message = text.trim();
-    if (!message || pending) return;
+    if (!message || pending || editing) return;
     if (contract !== savedContract && !(await saveContract())) return;
     setInput("");
     setMsgs((m) => [...m, { id: crypto.randomUUID(), role: "user", content: message }]);
@@ -206,11 +232,15 @@ function ThreadView({ threadId }: { threadId: string }) {
     const instruction = editInstruction.trim();
     if (!instruction || editing) return;
     if (contract !== savedContract && !(await saveContract())) return;
+    const originalContract = contract;
+    applyingEdit.current = true;
     setEditing(true);
+    setShowDoc(true);
     try {
       const r = await applyLeaseEdit({ data: { threadId, instruction } });
       setContract(r.revised);
       setSavedContract(r.revised);
+      localContractDirty.current = false;
       setEditInstruction("");
       setMsgs((m) => [
         ...m,
@@ -224,8 +254,12 @@ function ThreadView({ threadId }: { threadId: string }) {
       ]);
       toast.success("Contract updated with your change");
     } catch (e) {
+      setContract(originalContract);
+      setSavedContract(originalContract);
+      localContractDirty.current = false;
       toast.error(e instanceof Error ? e.message : "Edit failed");
     } finally {
+      applyingEdit.current = false;
       setEditing(false);
     }
   }
@@ -249,7 +283,12 @@ function ThreadView({ threadId }: { threadId: string }) {
             )}
           </span>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={editing || pending}
+              onClick={() => fileRef.current?.click()}
+            >
               Upload file
             </Button>
             <input
@@ -257,13 +296,19 @@ function ThreadView({ threadId }: { threadId: string }) {
               type="file"
               accept=".txt,.md,.text,text/plain,text/markdown"
               className="hidden"
+              disabled={editing || pending}
               onChange={(e) => {
                 const f = e.target.files?.[0];
                 if (f) uploadFile(f);
                 e.target.value = "";
               }}
             />
-            <Button variant="ghost" size="sm" onClick={() => setShowDoc((s) => !s)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={editing || pending}
+              onClick={() => setShowDoc((s) => !s)}
+            >
               {showDoc ? "Hide" : savedContract ? "View / edit contract" : "Paste contract"}
             </Button>
           </div>
@@ -273,16 +318,29 @@ function ThreadView({ threadId }: { threadId: string }) {
             <Textarea
               rows={10}
               value={contract}
-              onChange={(e) => setContract(e.target.value)}
+              onChange={(e) => {
+                setContract(e.target.value);
+                localContractDirty.current = true;
+              }}
+              disabled={editing || pending}
               placeholder="Paste the full text of the commercial lease or NDA here…"
               className="bg-background font-mono text-xs"
             />
             <div className="flex justify-end">
-              <Button size="sm" onClick={saveContract} disabled={contract === savedContract}>
+              <Button
+                size="sm"
+                onClick={saveContract}
+                disabled={editing || pending || contract === savedContract}
+              >
                 Attach contract
               </Button>
             </div>
           </div>
+        )}
+        {editing && (
+          <p className="mt-2 text-xs text-muted-foreground" role="status">
+            Applying edit…
+          </p>
         )}
         {savedContract && (
           <div className="mt-3 flex items-center gap-2">
@@ -294,13 +352,13 @@ function ThreadView({ threadId }: { threadId: string }) {
               }}
               placeholder='Describe a change, e.g. "reduce the notice period to 2 months"…'
               className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm"
-              disabled={editing}
+              disabled={editing || pending}
             />
             <Button
               size="sm"
               variant="outline"
               onClick={applyEdit}
-              disabled={editing || !editInstruction.trim()}
+              disabled={editing || pending || !editInstruction.trim()}
             >
               {editing ? "Applying…" : "Edit with AI"}
             </Button>
@@ -384,7 +442,7 @@ function ThreadView({ threadId }: { threadId: string }) {
             placeholder="Ask about clauses, risks, obligations…"
             className="resize-none bg-background"
           />
-          <Button type="submit" disabled={pending || !input.trim()}>
+          <Button type="submit" disabled={pending || editing || !input.trim()}>
             Send
           </Button>
         </div>

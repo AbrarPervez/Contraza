@@ -6,10 +6,29 @@ import { toast } from "sonner";
 import { getFirestoreDb } from "@/integrations/firebase/client";
 import { reviewMessagesCollection, userDocument } from "@/integrations/firebase/data";
 import { Button } from "@/components/ui/button";
-import { AlertDialog, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "@/components/ui/alert-dialog";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+} from "@/components/ui/alert-dialog";
 
-export function DeleteContractButton({ id, title, kind, onDeleted, iconOnly = false, disabled = false }: {
-  id: string; title: string; kind: "draft" | "review"; onDeleted?: () => void; iconOnly?: boolean; disabled?: boolean;
+export function DeleteContractButton({
+  id,
+  title,
+  kind,
+  onDeleted,
+  iconOnly = false,
+  disabled = false,
+}: {
+  id: string;
+  title: string;
+  kind: "draft" | "review";
+  onDeleted?: () => void;
+  iconOnly?: boolean;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -40,17 +59,46 @@ export function DeleteContractButton({ id, title, kind, onDeleted, iconOnly = fa
     }
   }
 
-  return <>
-    <Button variant="ghost" size={iconOnly ? "icon" : "sm"} disabled={disabled || deleting} onClick={() => setOpen(true)} aria-label={`Delete ${kind}: ${title}`} title={`Delete ${kind}`} className="shrink-0 text-muted-foreground hover:text-destructive"><Trash2 />{!iconOnly && "Delete"}</Button>
-    <AlertDialog open={open} onOpenChange={(next) => { if (!deleting) setOpen(next); }}>
-      <AlertDialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
-        <AlertDialogTitle>Delete {kind === "draft" ? "contract draft" : "review session"}?</AlertDialogTitle>
-        <AlertDialogDescription className="break-words">“{title}” will be permanently deleted{kind === "review" ? ", including its attached contract and all messages" : ", including its generated contract"}. This cannot be undone.</AlertDialogDescription>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
-          <Button variant="destructive" onClick={remove} disabled={deleting}><Trash2 />{deleting ? "Deleting…" : "Delete permanently"}</Button>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  </>;
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size={iconOnly ? "icon" : "sm"}
+        disabled={disabled || deleting}
+        onClick={() => setOpen(true)}
+        aria-label={`Delete ${kind}: ${title}`}
+        title={`Delete ${kind}`}
+        className="shrink-0 text-muted-foreground hover:text-destructive"
+      >
+        <Trash2 />
+        {!iconOnly && "Delete"}
+      </Button>
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!deleting) setOpen(next);
+        }}
+      >
+        <AlertDialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg">
+          <AlertDialogTitle>
+            Delete {kind === "draft" ? "contract draft" : "review session"}?
+          </AlertDialogTitle>
+          <AlertDialogDescription className="break-words">
+            “{title}” will be permanently deleted
+            {kind === "review"
+              ? ", including its attached contract and all messages"
+              : ", including its generated contract"}
+            . This cannot be undone.
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <Button variant="destructive" onClick={remove} disabled={deleting}>
+              <Trash2 />
+              {deleting ? "Deleting…" : "Delete permanently"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
 }

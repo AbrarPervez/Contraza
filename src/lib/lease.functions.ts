@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { FieldValue } from "firebase-admin/firestore";
 import { z } from "zod";
 import { requireFirebaseAuth } from "@/integrations/firebase/auth-middleware";
-import { generateGeminiText, generateGeminiTextStream } from "./gemini.server";
+import { generateGeminiTextStream } from "./gemini.server";
 import { isNda, missingContractFields, restoreContractParams } from "./contracts";
 import { streamUnstructuredDraftResponse } from "./unstructured-draft.server";
 
@@ -11,6 +11,15 @@ const documentId = z
   .min(1)
   .max(1500)
   .regex(/^[^/]+$/);
+
+function shouldFlushGenerationProgress(
+  text: string,
+  lastPersistedLength: number,
+  lastPersistedAt: number,
+) {
+  const elapsed = Date.now() - lastPersistedAt;
+  return elapsed >= 500 || (elapsed >= 200 && text.slice(lastPersistedLength).includes("\n"));
+}
 
 const DRAFT_SYSTEM = `You are a senior commercial real-estate lawyer drafting lease agreements between private businesses.
 Draft a complete, formal, professionally structured Commercial Lease Agreement in Markdown using ONLY the parameters provided.
@@ -27,6 +36,8 @@ export const generateLease = createServerFn({ method: "POST" })
     const requestId = data.diagnosticId ?? crypto.randomUUID();
     const startedAt = Date.now();
     let stage = "firestore_read";
+    let originalContent = "";
+    let streamTouchedDraft = false;
     const draftRef = context.adminDb
       .collection("users")
       .doc(context.userId)
@@ -42,12 +53,17 @@ export const generateLease = createServerFn({ method: "POST" })
         found: draft.exists,
       });
       if (!draft.exists) throw new Error("Draft not found");
-      const params = restoreContractParams(draft.data()?.["params"]);
+      const draftData = draft.data();
+      originalContent = typeof draftData?.["content"] === "string" ? draftData["content"] : "";
+      const params = restoreContractParams(draftData?.["params"]);
+      stage = "validation";
       const missing = missingContractFields(params);
       if (missing.length) throw new Error(`Please fill required fields: ${missing.join(", ")}`);
 
       stage = "gemini";
-      const content = await generateGeminiText(
+      let lastPersistedLength = 0;
+      let lastPersistedAt = 0;
+      const content = await generateGeminiTextStream(
         isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM,
         [
           {
@@ -59,6 +75,20 @@ export const generateLease = createServerFn({ method: "POST" })
             ],
           },
         ],
+        async (partial) => {
+          if (new TextEncoder().encode(partial).byteLength > 700_000) {
+            throw new Error(
+              "The generated contract is too large to save. Please try generating a shorter draft.",
+            );
+          }
+          if (!shouldFlushGenerationProgress(partial, lastPersistedLength, lastPersistedAt)) return;
+          stage = "firestore_progress_write";
+          streamTouchedDraft = true;
+          await draftRef.update({ content: partial });
+          lastPersistedLength = partial.length;
+          lastPersistedAt = Date.now();
+          stage = "gemini";
+        },
         { requestId },
       );
       if (!content) throw new Error("The AI returned an empty draft. Please try again.");
@@ -71,6 +101,7 @@ export const generateLease = createServerFn({ method: "POST" })
       stage = "firestore_write";
       const writeStartedAt = Date.now();
       await draftRef.update({ content, updatedAt: new Date().toISOString() });
+      streamTouchedDraft = false;
       console.info("[Contraza Draft]", {
         requestId,
         stage: "firestore_write",
@@ -80,6 +111,17 @@ export const generateLease = createServerFn({ method: "POST" })
       });
       return { content };
     } catch (error) {
+      if (streamTouchedDraft) {
+        try {
+          await draftRef.update({ content: originalContent });
+        } catch {
+          console.error("[Contraza Draft]", {
+            requestId,
+            stage: "restore_after_failure",
+            failureCategory: "firebase_restore_error",
+          });
+        }
+      }
       const isTimeout =
         error instanceof Error &&
         (error.name === "TimeoutError" ||
@@ -204,6 +246,22 @@ const EDIT_SYSTEM = `You are a senior commercial lawyer revising a commercial le
 Apply the user's requested change to the contract text precisely and consistently: update every clause, cross-reference, definition, and schedule affected by the change so the document stays internally coherent.
 Preserve the original structure, formatting (Markdown), numbering, and all unaffected wording. Do not add commentary — return ONLY the full revised contract text.`;
 
+export const renameReviewThread = createServerFn({ method: "POST" })
+  .middleware([requireFirebaseAuth])
+  .inputValidator((d: { threadId: string; title: string }) =>
+    z.object({ threadId: documentId, title: z.string().trim().min(1).max(100) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const threadRef = context.adminDb
+      .collection("users")
+      .doc(context.userId)
+      .collection("reviewThreads")
+      .doc(data.threadId);
+    if (!(await threadRef.get()).exists) throw new Error("Review not found.");
+    await threadRef.update({ title: data.title, updatedAt: new Date().toISOString() });
+    return { id: data.threadId, title: data.title };
+  });
+
 export const applyLeaseEdit = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
   .inputValidator((d: { threadId: string; instruction: string }) =>
@@ -221,36 +279,70 @@ export const applyLeaseEdit = createServerFn({ method: "POST" })
     const contractText = typeof thread["contractText"] === "string" ? thread["contractText"] : "";
     if (!contractText.trim()) throw new Error("Attach a contract first, then ask for edits.");
 
-    const revised = await generateGeminiText(EDIT_SYSTEM, [
-      {
-        role: "user",
-        parts: [
+    let lastPersistedLength = 0;
+    let lastPersistedAt = 0;
+    let streamTouchedContract = false;
+    try {
+      const revised = await generateGeminiTextStream(
+        EDIT_SYSTEM,
+        [
           {
-            text: `CONTRACT TEXT:\n"""\n${contractText.slice(0, 120000)}\n"""\n\nREQUESTED CHANGE:\n${data.instruction}`,
+            role: "user",
+            parts: [
+              {
+                text: `CONTRACT TEXT:\n"""\n${contractText.slice(0, 120000)}\n"""\n\nREQUESTED CHANGE:\n${data.instruction}`,
+              },
+            ],
           },
         ],
-      },
-    ]);
-    if (!revised) throw new Error("The AI returned an empty revision. Please try again.");
+        async (partial) => {
+          if (new TextEncoder().encode(partial).byteLength > 700_000) {
+            throw new Error("The revised contract is too large to save. Keep it under 700 KB.");
+          }
+          if (!shouldFlushGenerationProgress(partial, lastPersistedLength, lastPersistedAt)) return;
+          streamTouchedContract = true;
+          await threadRef.update({ contractText: partial });
+          lastPersistedLength = partial.length;
+          lastPersistedAt = Date.now();
+        },
+      );
+      if (!revised) throw new Error("The AI returned an empty revision. Please try again.");
+      if (new TextEncoder().encode(revised).byteLength > 700_000) {
+        throw new Error("The revised contract is too large to save. Keep it under 700 KB.");
+      }
 
-    const now = new Date().toISOString();
-    await threadRef.update({ contractText: revised, updatedAt: now });
-    const batch = context.adminDb.batch();
-    const messages = threadRef.collection("messages");
-    batch.create(messages.doc(), {
-      role: "user",
-      content: `Edit requested: ${data.instruction}`,
-      createdAt: now,
-    });
-    batch.create(messages.doc(), {
-      role: "assistant",
-      content:
-        "I've applied that change and updated the attached contract. Open the contract panel to review the revised text.",
-      createdAt: new Date(Date.now() + 1).toISOString(),
-    });
-    await batch.commit();
+      const now = new Date().toISOString();
+      const batch = context.adminDb.batch();
+      batch.update(threadRef, { contractText: revised, updatedAt: now });
+      const messages = threadRef.collection("messages");
+      batch.create(messages.doc(), {
+        role: "user",
+        content: `Edit requested: ${data.instruction}`,
+        createdAt: now,
+      });
+      batch.create(messages.doc(), {
+        role: "assistant",
+        content:
+          "I've applied that change and updated the attached contract. Open the contract panel to review the revised text.",
+        createdAt: new Date(Date.now() + 1).toISOString(),
+      });
+      await batch.commit();
+      streamTouchedContract = false;
 
-    return { revised };
+      return { revised };
+    } catch (error) {
+      if (streamTouchedContract) {
+        try {
+          await threadRef.update({ contractText });
+        } catch {
+          console.error("[Contraza Review Edit]", {
+            stage: "restore_after_failure",
+            failureCategory: "firebase_restore_error",
+          });
+        }
+      }
+      throw error;
+    }
   });
 
 const UNSTRUCTURED_DRAFT_SYSTEM = `You are Contraza AI Assistant, a conversational contract assistant for businesses.
@@ -292,6 +384,22 @@ export const listUnstructuredDraftChats = createServerFn({ method: "POST" })
       }
       return { id: chat.id, title: data["title"], updatedAt: data["updatedAt"] };
     });
+  });
+
+export const renameUnstructuredDraftChat = createServerFn({ method: "POST" })
+  .middleware([requireFirebaseAuth])
+  .inputValidator((d: { chatId: string; title: string }) =>
+    z.object({ chatId: documentId, title: z.string().trim().min(1).max(100) }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const chatRef = context.adminDb
+      .collection("users")
+      .doc(context.userId)
+      .collection("draftChats")
+      .doc(data.chatId);
+    if (!(await chatRef.get()).exists) throw new Error("Drafting conversation not found.");
+    await chatRef.update({ title: data.title, updatedAt: new Date().toISOString() });
+    return { id: data.chatId, title: data.title };
   });
 
 export const deleteUnstructuredDraftChat = createServerFn({ method: "POST" })

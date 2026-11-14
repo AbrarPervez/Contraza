@@ -38,7 +38,8 @@ export function AppHeader() {
   }
 
   const linkCls = "text-sm text-muted-foreground hover:text-foreground";
-  const activeCls = "text-sm font-medium text-foreground underline decoration-seal underline-offset-8";
+  const activeCls =
+    "text-sm font-medium text-foreground underline decoration-seal underline-offset-8";
 
   return (
     <header className="no-print border-b bg-paper">
