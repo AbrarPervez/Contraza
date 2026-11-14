@@ -42,7 +42,7 @@ describe("generateGeminiText", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("/models/gemini-3.8-flash:generateContent");
+    expect(url).toContain("/models/gemini-3.6-flash:generateContent");
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("server-secret");
     expect(JSON.parse(String(request.body))).toMatchObject({
       systemInstruction: { parts: [{ text: "system instruction" }] },
@@ -94,7 +94,7 @@ describe("generateGeminiText", () => {
       generateGeminiText("system", [{ role: "user", parts: [{ text: "draft this" }] }]),
     ).resolves.toBe("Fallback draft");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]?.[0]).toContain("/models/gemini-3.6-flash:generateContent");
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/models/gemini-3.5-flash-lite:generateContent");
   });
 
   it("surfaces API errors without returning a success-shaped fallback", async () => {
@@ -163,7 +163,7 @@ describe("generateGeminiText", () => {
       generateGeminiText("system", [{ role: "user", parts: [{ text: "draft this" }] }]),
     ).resolves.toBe("Fallback response");
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchMock.mock.calls[3]?.[0]).toContain("/models/gemini-3.6-flash:generateContent");
+    expect(fetchMock.mock.calls[3]?.[0]).toContain("/models/gemini-3.5-flash-lite:generateContent");
   });
 
   it("preserves the final API error when all models return 503", async () => {
@@ -179,7 +179,7 @@ describe("generateGeminiText", () => {
     await expect(
       generateGeminiText("system", [{ role: "user", parts: [{ text: "draft this" }] }]),
     ).rejects.toThrow("Gemini request failed (503): Model is experiencing high demand");
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(9);
   });
 
   it("streams text chunks without changing the model or output budget", async () => {
@@ -255,8 +255,8 @@ describe("generateGeminiText", () => {
 
     await expect(generation).resolves.toBe("Fallback answer");
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toContain("/models/gemini-3.8-flash:");
-    expect(fetchMock.mock.calls[2]?.[0]).toContain("/models/gemini-3.6-flash:");
+    expect(fetchMock.mock.calls[0]?.[0]).toContain("/models/gemini-3.6-flash:");
+    expect(fetchMock.mock.calls[2]?.[0]).toContain("/models/gemini-3.5-flash-lite:");
   });
 
   it("aborts each streaming attempt at the configured timeout and uses the fallback model", async () => {
@@ -356,7 +356,7 @@ describe("generateGeminiText", () => {
 
     await expect(generation).resolves.toBe("Fallback stream");
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchMock.mock.calls[3]?.[0]).toContain("/models/gemini-3.6-flash:");
+    expect(fetchMock.mock.calls[3]?.[0]).toContain("/models/gemini-3.5-flash-lite:");
   });
 
   it("does not retry a stream after partial output has arrived", async () => {

@@ -21,7 +21,11 @@ const responseSchema = z.object({
   error: z.object({ message: z.string().optional() }).optional(),
 });
 
-const MODEL_FALLBACKS = ["gemini-3.8-flash", "gemini-3.6-flash"] as const;
+const MODEL_FALLBACKS = [
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
+] as const;
 const MAX_503_RETRIES = 2;
 const MAX_RETRY_AFTER_MS = 5_000;
 const MAX_RATE_LIMIT_BACKOFF_MS = 30_000;
