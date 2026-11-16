@@ -17,6 +17,7 @@ import { Document, HeadingLevel, Packer, Paragraph, TextRun } from "docx";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { LanguageSelector, VoiceInputButton, useLanguagePreference } from "@/components/LanguageVoiceControls";
 import { Textarea } from "@/components/ui/textarea";
 import {
   hasAssistantCompletionForUser,
@@ -119,6 +120,7 @@ function DraftChat() {
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [chatExists, setChatExists] = useState(false);
+  const { language, setLanguage } = useLanguagePreference();
   const [editingContractId, setEditingContractId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -179,7 +181,7 @@ function DraftChat() {
     setPending(true);
     try {
       const result = await sendUnstructuredDraftMessage({
-        data: { chatId, message, userMessageId },
+        data: { chatId, message, userMessageId, language },
       });
       setMessages((current) => {
         const assistantMessage: DraftChatMessage = {
@@ -297,7 +299,8 @@ function DraftChat() {
             <p className="text-xs text-muted-foreground">Contract drafting and discussions</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <LanguageSelector value={language} onChange={setLanguage} />
           <Button variant="outline" size="sm" onClick={() => void createChat()}>
             <FilePlus2 />
             New Chat
@@ -527,6 +530,11 @@ function DraftChat() {
             className="max-h-40 resize-y border-0 bg-transparent shadow-none focus-visible:ring-0"
             disabled={pending || !chatExists}
             aria-label="Message Contraza AI Assistant"
+          />
+          <VoiceInputButton
+            language={language}
+            disabled={pending || !chatExists}
+            onTranscript={(transcript) => setInput((current) => current ? `${current} ${transcript}` : transcript)}
           />
           <Button
             type="submit"
