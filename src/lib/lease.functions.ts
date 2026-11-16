@@ -632,38 +632,47 @@ export const saveUnstructuredDraftContract = createServerFn({ method: "POST" })
 
 export const transcribeSpeech = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { audioBase64: string; mimeType: string; language: ContrazaLanguage }) =>
-    z.object({
-      audioBase64: z
-        .string()
-        .min(100)
-        .max(7_000_000)
-        .regex(/^[A-Za-z0-9+/]+={0,2}$/),
-      mimeType: z.enum([
-        "audio/webm",
-        "audio/mp4",
-        "audio/mpeg",
-        "audio/wav",
-        "audio/ogg",
-        "audio/aac",
-        "audio/flac",
-      ]),
-      language: languageSchema,
-    }).parse(d),
+  .inputValidator(
+    (d: { audioBase64: string; mimeType: string; language: ContrazaLanguage }) =>
+      z
+        .object({
+          audioBase64: z
+            .string()
+            .min(100)
+            .max(7_000_000)
+            .regex(/^[A-Za-z0-9+/]+={0,2}$/),
+          mimeType: z.enum([
+            "audio/webm",
+            "audio/mp4",
+            "audio/mpeg",
+            "audio/wav",
+            "audio/ogg",
+            "audio/aac",
+            "audio/flac",
+          ]),
+          language: languageSchema,
+        })
+        .parse(d),
   )
   .handler(async ({ data }) => {
     const apiKey = process.env["GEMINI_API_KEY"]?.trim();
     if (!apiKey) throw new Error("Missing GEMINI_API_KEY in the server environment.");
 
-    const selectedLanguage = ({
-      en: "English", hi: "Hindi", te: "Telugu", ta: "Tamil", kn: "Kannada",
-      ml: "Malayalam",
-      bn: "Bengali",
-      mr: "Marathi",
-      gu: "Gujarati",
-      pa: "Punjabi",
-      ur: "Urdu",
-    } as const)[data.language];
+    const selectedLanguage = (
+      {
+        en: "English",
+        hi: "Hindi",
+        te: "Telugu",
+        ta: "Tamil",
+        kn: "Kannada",
+        ml: "Malayalam",
+        bn: "Bengali",
+        mr: "Marathi",
+        gu: "Gujarati",
+        pa: "Punjabi",
+        ur: "Urdu",
+      } as const
+    )[data.language];
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000);
@@ -675,40 +684,71 @@ export const transcribeSpeech = createServerFn({ method: "POST" })
           headers: { "content-type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            contents: [{
-              role: "user",
-              parts: [
-                {
-                  text: `Transcribe the attached speech into text. The expected language is ${selectedLanguage}, but preserve the actual spoken language if the speaker switches languages. Do not translate, summarize, interpret, or answer the speaker. Preserve names, numbers, dates, currency amounts, and legal terminology. Return only the transcript, with natural punctuation.`,
-                },
-                { inline_data: { mime_type: data.mimeType, data: data.audioBase64 } },
-              ],
-            }],
-            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    text: `Transcribe the attached speech into text. The expected language is ${selectedLanguage}, but preserve the actual spoken language if the speaker switches languages. Do not translate, summarize, interpret, or answer the speaker. Preserve names, numbers, dates, currency amounts, and legal terminology. Return only the transcript, with natural punctuation.`,
+                  },
+                  {
+                    inline_data: {
+                      mime_type: data.mimeType,
+                      data: data.audioBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 4096,
+            },
           }),
         },
       );
+
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
         const message =
-          typeof payload === "object" && payload !== null &&
-          "error" in payload && typeof payload.error === "object" && payload.error !== null &&
-          "message" in payload.error && typeof payload.error.message === "string"
+          typeof payload === "object" &&
+          payload !== null &&
+          "error" in payload &&
+          typeof payload.error === "object" &&
+          payload.error !== null &&
+          "message" in payload.error &&
+          typeof payload.error.message === "string"
             ? payload.error.message
             : response.statusText;
         throw new Error(`Speech transcription failed (${response.status}): ${message}`);
       }
-      const parsed = z.object({
-        candidates: z.array(z.object({
-          content: z.object({ parts: z.array(z.object({ text: z.string().optional() })) }).optional(),
-        })).optional(),
-      }).safeParse(payload);
-      if (!parsed.success) throw new Error("Gemini returned an unexpected transcription response.");
+
+      const parsed = z
+        .object({
+          candidates: z
+            .array(
+              z.object({
+                content: z
+                  .object({
+                    parts: z.array(z.object({ text: z.string().optional() })),
+                  })
+                  .optional(),
+              }),
+            )
+            .optional(),
+        })
+        .safeParse(payload);
+      if (!parsed.success) {
+        throw new Error("Gemini returned an unexpected transcription response.");
+      }
+
       const transcript = parsed.data.candidates?.[0]?.content?.parts
         .map((part) => part.text ?? "")
         .join("")
         .trim();
-      if (!transcript) throw new Error("No speech was recognized. Please try recording again.");
+      if (!transcript) {
+        throw new Error("No speech was recognized. Please try recording again.");
+      }
       return { transcript };
     } catch (error) {
       if (controller.signal.aborted) {
