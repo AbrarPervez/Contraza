@@ -77,7 +77,9 @@ export function VoiceInputButton({
 
   async function startRecording() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast.error("Audio recording is not supported by this browser. Try a recent version of Chrome.");
+      toast.error(
+        "Audio recording is not supported by this browser. Try a recent version of Chrome.",
+      );
       return;
     }
     try {
@@ -93,6 +95,7 @@ export function VoiceInputButton({
         toast.error("Audio recording failed. Please try again.");
         setRecording(false);
         stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       };
       recorder.onstop = () => {
         void processRecording(recorder.mimeType || "audio/webm");
@@ -117,15 +120,18 @@ export function VoiceInputButton({
       toast.error("No audio was captured. Please try again.");
       return;
     }
-    if (blob.size > 8 * 1024 * 1024) {
-      toast.error("Recording is too large. Please keep voice messages shorter than one minute.");
+    if (blob.size > 5 * 1024 * 1024) {
+      toast.error("Recording is too large. Please record a shorter voice message.");
       return;
     }
     setTranscribing(true);
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => (typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read audio.")));
+        reader.onload = () =>
+          typeof reader.result === "string"
+            ? resolve(reader.result)
+            : reject(new Error("Could not read audio."));
         reader.onerror = () => reject(new Error("Could not read audio."));
         reader.readAsDataURL(blob);
       });
@@ -157,7 +163,13 @@ export function VoiceInputButton({
       variant={recording ? "destructive" : "outline"}
       disabled={disabled || transcribing}
       onClick={() => (recording ? stopRecording() : void startRecording())}
-      aria-label={recording ? "Stop voice recording" : transcribing ? "Transcribing voice" : "Start voice input"}
+      aria-label={
+        recording
+          ? "Stop voice recording"
+          : transcribing
+            ? "Transcribing voice"
+            : "Start voice input"
+      }
       title={recording ? "Stop recording" : transcribing ? "Transcribing…" : "Speak"}
     >
       {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
