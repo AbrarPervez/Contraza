@@ -5,7 +5,7 @@ import { requireFirebaseAuth } from "@/integrations/firebase/auth-middleware";
 import { generateGeminiTextStream } from "./gemini.server";
 import { isNda, missingContractFields, restoreContractParams } from "./contracts";
 import { streamUnstructuredDraftResponse } from "./unstructured-draft.server";
-import { languageInstruction, type ContrazaLanguage } from "./languages";
+import { draftLanguageInstruction, languageInstruction, type ContrazaLanguage } from "./languages";
 
 const languageSchema = z.enum([
   "en",
@@ -85,7 +85,7 @@ export const generateLease = createServerFn({ method: "POST" })
       let lastPersistedLength = 0;
       let lastPersistedAt = 0;
       const content = await generateGeminiTextStream(
-        `${isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM}\n\n${languageInstruction(data.language)}`,
+        `${isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM}\n\n${draftLanguageInstruction(data.language)}`,
         [
           {
             role: "user",
@@ -678,7 +678,7 @@ export const transcribeSpeech = createServerFn({ method: "POST" })
     const timeout = setTimeout(() => controller.abort(), 45_000);
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },

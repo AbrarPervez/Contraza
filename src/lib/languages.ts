@@ -23,3 +23,9 @@ export function languageInstruction(code: ContrazaLanguage) {
   if (code === "en") return "Respond in clear, professional English.";
   return `Respond in ${language.label} (${language.nativeName}). Preserve legal meaning, defined terms, clause numbering, dates, amounts, party names, and citations. Do not silently omit or simplify legal obligations. Where a legal term has no reliable equivalent, retain the original term and briefly explain it in ${language.label}. Keep the original contract text unchanged unless the user explicitly requests a translated or revised contract.`;
 }
+
+export function draftLanguageInstruction(code: ContrazaLanguage) {
+  const language = CONTRAZA_LANGUAGES.find((item) => item.code === code) ?? CONTRAZA_LANGUAGES[0];
+  if (code === "en") return "Draft the entire contract in clear, professional English.";
+  return `Draft the entire contract in ${language.label} (${language.nativeName}). Use professional legal terminology appropriate for ${language.label}-speaking jurisdictions. Preserve party names, defined terms, dates, amounts, and citations as-is. Do not silently omit or simplify legal obligations. Where a legal term has no reliable equivalent in ${language.label}, retain the English term and provide a parenthetical explanation in ${language.label}.`;
+}
