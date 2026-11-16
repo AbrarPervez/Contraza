@@ -10,6 +10,8 @@ import {
 } from "@/components/ui/select";
 import { NDA_REQUIRED_FIELDS, type NdaParams } from "@/lib/contracts";
 import type { ReactNode } from "react";
+import { VoiceInputButton } from "@/components/LanguageVoiceControls";
+import type { ContrazaLanguage } from "@/lib/languages";
 
 const ENTITY_TYPES = [
   "Private Limited Company",
@@ -24,10 +26,12 @@ export function NdaFields({
   params,
   onChange,
   disabled = false,
+  language = "en",
 }: {
   params: NdaParams;
   onChange: (params: NdaParams) => void;
   disabled?: boolean;
+  language?: ContrazaLanguage;
 }) {
   const set = (key: keyof NdaParams, value: string) => onChange({ ...params, [key]: value });
   const field = (key: keyof NdaParams, label: string, type = "text", multiline = false) => (
@@ -112,7 +116,31 @@ export function NdaFields({
           "Courts",
           "Mediation then arbitration",
         ])}
-        {field("specialTerms", "Special terms / additional clauses", "text", true)}
+        <div>
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="specialTerms" className="text-xs">
+              Special terms / additional clauses
+            </Label>
+            <VoiceInputButton
+              language={language}
+              disabled={disabled}
+              onTranscript={(transcript) =>
+                set(
+                  "specialTerms",
+                  params.specialTerms ? `${params.specialTerms} ${transcript}` : transcript,
+                )
+              }
+            />
+          </div>
+          <Textarea
+            id="specialTerms"
+            rows={3}
+            value={params.specialTerms}
+            onChange={(event) => set("specialTerms", event.target.value)}
+            disabled={disabled}
+            className="mt-1 bg-paper"
+          />
+        </div>
       </Group>
       <Group title="Signing">
         {field("signingPlace", "Place of signing")}
