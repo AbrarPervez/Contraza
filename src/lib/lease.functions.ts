@@ -501,13 +501,13 @@ export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
   .inputValidator(
     (d: { chatId: string; message: string; userMessageId: string; language?: ContrazaLanguage }) =>
-    z
-      .object({
-        chatId: documentId,
-        message: z.string().trim().min(1).max(8000),
-        userMessageId: z.string().uuid(),
-        language: languageSchema.default("en"),
-      })
+      z
+        .object({
+          chatId: documentId,
+          message: z.string().trim().min(1).max(8000),
+          userMessageId: z.string().uuid(),
+          language: languageSchema.default("en"),
+        })
         .parse(d),
   )
   .handler(async ({ data, context }) => {
