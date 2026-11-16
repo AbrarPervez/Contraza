@@ -5,6 +5,9 @@ import { requireFirebaseAuth } from "@/integrations/firebase/auth-middleware";
 import { generateGeminiTextStream } from "./gemini.server";
 import { isNda, missingContractFields, restoreContractParams } from "./contracts";
 import { streamUnstructuredDraftResponse } from "./unstructured-draft.server";
+import { languageInstruction, type ContrazaLanguage } from "./languages";
+
+const languageSchema = z.enum(["en", "hi", "te", "ta", "kn", "ml", "bn", "mr", "gu", "pa", "ur"]);
 
 const documentId = z
   .string()
@@ -29,8 +32,8 @@ End with an "IN WITNESS WHEREOF" execution block stating the place and date of s
 
 export const generateLease = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { draftId: string; diagnosticId?: string }) =>
-    z.object({ draftId: documentId, diagnosticId: z.string().uuid().optional() }).parse(d),
+  .inputValidator((d: { draftId: string; language?: ContrazaLanguage; diagnosticId?: string }) =>
+    z.object({ draftId: documentId, language: languageSchema.default("en"), diagnosticId: z.string().uuid().optional() }).parse(d),
   )
   .handler(async ({ data, context }) => {
     const requestId = data.diagnosticId ?? crypto.randomUUID();
@@ -64,7 +67,7 @@ export const generateLease = createServerFn({ method: "POST" })
       let lastPersistedLength = 0;
       let lastPersistedAt = 0;
       const content = await generateGeminiTextStream(
-        isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM,
+        `${isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM}\n\n${languageInstruction(data.language)}`,
         [
           {
             role: "user",
@@ -159,8 +162,8 @@ Use clear Markdown and be direct. For a specific question, answer it first and f
 
 export const sendReviewMessage = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { threadId: string; message: string }) =>
-    z.object({ threadId: documentId, message: z.string().trim().min(1).max(8000) }).parse(d),
+  .inputValidator((d: { threadId: string; message: string; language?: ContrazaLanguage }) =>
+    z.object({ threadId: documentId, message: z.string().trim().min(1).max(8000), language: languageSchema.default("en") }).parse(d),
   )
   .handler(async ({ data, context }) => {
     const threadRef = context.adminDb
@@ -218,7 +221,7 @@ export const sendReviewMessage = createServerFn({ method: "POST" })
     let reply: string;
     try {
       reply = await generateGeminiTextStream(
-        `${REVIEW_SYSTEM}\n\n${contract}`,
+        `${REVIEW_SYSTEM}\n\n${languageInstruction(data.language)}\n\n${contract}`,
         contents,
         async (partial) => {
           if (Date.now() - lastFlush < 500) return;
@@ -264,8 +267,8 @@ export const renameReviewThread = createServerFn({ method: "POST" })
 
 export const applyLeaseEdit = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { threadId: string; instruction: string }) =>
-    z.object({ threadId: documentId, instruction: z.string().trim().min(3).max(4000) }).parse(d),
+  .inputValidator((d: { threadId: string; instruction: string; language?: ContrazaLanguage }) =>
+    z.object({ threadId: documentId, instruction: z.string().trim().min(3).max(4000), language: languageSchema.default("en") }).parse(d),
   )
   .handler(async ({ data, context }) => {
     const threadRef = context.adminDb
@@ -284,7 +287,7 @@ export const applyLeaseEdit = createServerFn({ method: "POST" })
     let streamTouchedContract = false;
     try {
       const revised = await generateGeminiTextStream(
-        EDIT_SYSTEM,
+        `${EDIT_SYSTEM}\n\n${languageInstruction(data.language)}`,
         [
           {
             role: "user",
@@ -466,12 +469,13 @@ export const getUnstructuredDraftChat = createServerFn({ method: "POST" })
 
 export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-  .inputValidator((d: { chatId: string; message: string; userMessageId: string }) =>
+   .inputValidator((d: { chatId: string; message: string; userMessageId: string; language?: ContrazaLanguage }) =>
     z
       .object({
         chatId: documentId,
         message: z.string().trim().min(1).max(8000),
         userMessageId: z.string().uuid(),
+        language: languageSchema.default("en"),
       })
       .parse(d),
   )
@@ -538,7 +542,7 @@ export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
 
     const { reply, contractText } = await streamUnstructuredDraftResponse(
       generateGeminiTextStream,
-      UNSTRUCTURED_DRAFT_SYSTEM,
+      `${UNSTRUCTURED_DRAFT_SYSTEM}\n\n${languageInstruction(data.language)}`,
       contents,
       assistantMessageRef,
       async (parsed) => {
@@ -592,4 +596,77 @@ export const saveUnstructuredDraftContract = createServerFn({ method: "POST" })
     batch.update(chatRef, { updatedAt: new Date().toISOString() });
     await batch.commit();
     return { contractText: data.contractText };
+  });
+
+
+export const transcribeSpeech = createServerFn({ method: "POST" })
+  .middleware([requireFirebaseAuth])
+  .inputValidator((d: { audioBase64: string; mimeType: string; language: ContrazaLanguage }) =>
+    z.object({
+      audioBase64: z.string().min(100).max(11_200_000).regex(/^[A-Za-z0-9+/]+={0,2}$/),
+      mimeType: z.enum(["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg", "audio/aac", "audio/flac"]),
+      language: languageSchema,
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const apiKey = process.env["GEMINI_API_KEY"]?.trim();
+    if (!apiKey) throw new Error("Missing GEMINI_API_KEY in the server environment.");
+
+    const selectedLanguage = ({
+      en: "English", hi: "Hindi", te: "Telugu", ta: "Tamil", kn: "Kannada",
+      ml: "Malayalam", bn: "Bengali", mr: "Marathi", gu: "Gujarati",
+      pa: "Punjabi", ur: "Urdu",
+    } as const)[data.language];
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            contents: [{
+              role: "user",
+              parts: [
+                { text: `Transcribe the attached speech into text. The expected language is ${selectedLanguage}, but preserve the actual spoken language if the speaker switches languages. Do not translate, summarize, interpret, or answer the speaker. Preserve names, numbers, dates, currency amounts, and legal terminology. Return only the transcript, with natural punctuation.` },
+                { inline_data: { mime_type: data.mimeType, data: data.audioBase64 } },
+              ],
+            }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 },
+          }),
+        },
+      );
+      const payload: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message =
+          typeof payload === "object" && payload !== null &&
+          "error" in payload && typeof payload.error === "object" && payload.error !== null &&
+          "message" in payload.error && typeof payload.error.message === "string"
+            ? payload.error.message
+            : response.statusText;
+        throw new Error(`Speech transcription failed (${response.status}): ${message}`);
+      }
+      const parsed = z.object({
+        candidates: z.array(z.object({
+          content: z.object({ parts: z.array(z.object({ text: z.string().optional() })) }).optional(),
+        })).optional(),
+      }).safeParse(payload);
+      if (!parsed.success) throw new Error("Gemini returned an unexpected transcription response.");
+      const transcript = parsed.data.candidates?.[0]?.content?.parts
+        .map((part) => part.text ?? "")
+        .join("")
+        .trim();
+      if (!transcript) throw new Error("No speech was recognized. Please try recording again.");
+      return { transcript };
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error("Speech transcription timed out. Please try a shorter recording.");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   });
