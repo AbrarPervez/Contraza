@@ -21,6 +21,7 @@ import { NdaFields } from "@/components/NdaFields";
 import { generateLease } from "@/lib/lease.functions";
 import { DraftContentEditor } from "@/components/DraftContentEditor";
 import { DeleteContractButton } from "@/components/DeleteContractButton";
+import { LanguageSelector, VoiceInputButton, useLanguagePreference } from "@/components/LanguageVoiceControls";
 
 export const Route = createFileRoute("/_authenticated/draft/$id")({
   head: () => ({
@@ -55,6 +56,7 @@ function DraftEditor() {
   const { id } = Route.useParams();
   const navigate = useNavigate();
   const [p, setP] = useState<ContractParams | null>(null);
+  const { language, setLanguage } = useLanguagePreference();
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
@@ -167,7 +169,7 @@ function DraftEditor() {
         updatedAt: new Date().toISOString(),
       });
       stage = "tanstack_server_function";
-      const r = await generateLease({ data: { draftId: id, diagnosticId } });
+      const r = await generateLease({ data: { draftId: id, diagnosticId, language } });
       setContent(r.content);
       setStreamingContent(null);
       toast.success(p && isNda(p) ? "NDA drafted" : "Lease agreement drafted");
@@ -265,11 +267,14 @@ function DraftEditor() {
   return (
     <main className="mx-auto grid max-w-7xl gap-8 px-6 py-8 lg:grid-cols-[minmax(0,460px)_1fr]">
       <div className="no-print space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold">{title}</h1>
-          <p className="text-xs text-muted-foreground">
-            {saving ? "Saving…" : "All changes saved"}
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold">{title}</h1>
+            <p className="text-xs text-muted-foreground">
+              {saving ? "Saving…" : "All changes saved"}
+            </p>
+          </div>
+          <LanguageSelector value={language} onChange={setLanguage} />
         </div>
 
         <fieldset disabled={generating} className="min-w-0 space-y-6 border-0 p-0">
@@ -373,7 +378,17 @@ function DraftEditor() {
                   ))}
                 </div>
                 <div>
-                  <Label className="text-xs">Special terms / additional clauses</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="text-xs">Special terms / additional clauses</Label>
+                    <VoiceInputButton
+                      language={language}
+                      disabled={generating}
+                      onTranscript={(transcript) => setP((current) => current ? {
+                        ...current,
+                        specialTerms: current.specialTerms ? `${current.specialTerms} ${transcript}` : transcript,
+                      } : current)}
+                    />
+                  </div>
                   <Textarea
                     rows={4}
                     value={p.specialTerms}
