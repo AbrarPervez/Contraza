@@ -279,7 +279,7 @@ function DraftEditor() {
 
         <fieldset disabled={generating} className="min-w-0 space-y-6 border-0 p-0">
           {isNda(p) ? (
-            <NdaFields params={p} onChange={setP} disabled={generating} />
+            <NdaFields params={p} onChange={setP} disabled={generating} language={language} />
           ) : (
             <>
               <Section n="1" title="Landlord (Lessor)">
