@@ -5,7 +5,7 @@ import { requireFirebaseAuth } from "@/integrations/firebase/auth-middleware";
 import { generateGeminiTextStream } from "./gemini.server";
 import { isNda, missingContractFields, restoreContractParams } from "./contracts";
 import { streamUnstructuredDraftResponse } from "./unstructured-draft.server";
-import { draftLanguageInstruction, languageInstruction, type ContrazaLanguage } from "./languages";
+import { languageInstruction, type ContrazaLanguage } from "./languages";
 
 const languageSchema = z.enum([
   "en",
@@ -85,7 +85,7 @@ export const generateLease = createServerFn({ method: "POST" })
       let lastPersistedLength = 0;
       let lastPersistedAt = 0;
       const content = await generateGeminiTextStream(
-        `${isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM}\n\n${draftLanguageInstruction(data.language)}`,
+        `${isNda(params) ? NDA_SYSTEM : DRAFT_SYSTEM}\n\n${languageInstruction(data.language)}`,
         [
           {
             role: "user",
