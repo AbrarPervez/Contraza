@@ -357,6 +357,15 @@ function ThreadView({ threadId }: { threadId: string }) {
               className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm"
               disabled={editing || pending}
             />
+            <VoiceInputButton
+              language={language}
+              disabled={editing || pending}
+              onTranscript={(transcript) =>
+                setEditInstruction((current) =>
+                  current ? `${current} ${transcript}` : transcript,
+                )
+              }
+            />
             <Button
               size="sm"
               variant="outline"
