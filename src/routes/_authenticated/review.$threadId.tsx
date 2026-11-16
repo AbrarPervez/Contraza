@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { reviewMessagesCollection, userDocument } from "@/integrations/firebase/data";
 import { Button } from "@/components/ui/button";
+import { LanguageSelector, VoiceInputButton, useLanguagePreference } from "@/components/LanguageVoiceControls";
 import { Textarea } from "@/components/ui/textarea";
 import { sendReviewMessage, applyLeaseEdit } from "@/lib/lease.functions";
 import { looksLikeContract } from "@/lib/contracts";
@@ -61,6 +62,7 @@ function ThreadView({ threadId }: { threadId: string }) {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const { language, setLanguage } = useLanguagePreference();
   const [editInstruction, setEditInstruction] = useState("");
   const [editing, setEditing] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -207,7 +209,7 @@ function ThreadView({ threadId }: { threadId: string }) {
     setMsgs((m) => [...m, { id: crypto.randomUUID(), role: "user", content: message }]);
     setPending(true);
     try {
-      const r = await sendReviewMessage({ data: { threadId, message } });
+      const r = await sendReviewMessage({ data: { threadId, message, language } });
       setMsgs((current) =>
         current.some((item) => item.id === r.messageId)
           ? current.map((item) =>
@@ -237,7 +239,7 @@ function ThreadView({ threadId }: { threadId: string }) {
     setEditing(true);
     setShowDoc(true);
     try {
-      const r = await applyLeaseEdit({ data: { threadId, instruction } });
+      const r = await applyLeaseEdit({ data: { threadId, instruction, language } });
       setContract(r.revised);
       setSavedContract(r.revised);
       localContractDirty.current = false;
@@ -282,7 +284,8 @@ function ThreadView({ threadId }: { threadId: string }) {
               <span className="text-muted-foreground">No contract attached yet</span>
             )}
           </span>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <LanguageSelector value={language} onChange={setLanguage} />
             <Button
               variant="ghost"
               size="sm"
@@ -441,6 +444,11 @@ function ThreadView({ threadId }: { threadId: string }) {
             }}
             placeholder="Ask about clauses, risks, obligations…"
             className="resize-none bg-background"
+          />
+          <VoiceInputButton
+            language={language}
+            disabled={pending || editing}
+            onTranscript={(transcript) => setInput((current) => current ? `${current} ${transcript}` : transcript)}
           />
           <Button type="submit" disabled={pending || editing || !input.trim()}>
             Send
