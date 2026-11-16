@@ -7,7 +7,19 @@ import { isNda, missingContractFields, restoreContractParams } from "./contracts
 import { streamUnstructuredDraftResponse } from "./unstructured-draft.server";
 import { languageInstruction, type ContrazaLanguage } from "./languages";
 
-const languageSchema = z.enum(["en", "hi", "te", "ta", "kn", "ml", "bn", "mr", "gu", "pa", "ur"]);
+const languageSchema = z.enum([
+  "en",
+  "hi",
+  "te",
+  "ta",
+  "kn",
+  "ml",
+  "bn",
+  "mr",
+  "gu",
+  "pa",
+  "ur",
+]);
 
 const documentId = z
   .string()
@@ -33,7 +45,13 @@ End with an "IN WITNESS WHEREOF" execution block stating the place and date of s
 export const generateLease = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
   .inputValidator((d: { draftId: string; language?: ContrazaLanguage; diagnosticId?: string }) =>
-    z.object({ draftId: documentId, language: languageSchema.default("en"), diagnosticId: z.string().uuid().optional() }).parse(d),
+    z
+      .object({
+        draftId: documentId,
+        language: languageSchema.default("en"),
+        diagnosticId: z.string().uuid().optional(),
+      })
+      .parse(d),
   )
   .handler(async ({ data, context }) => {
     const requestId = data.diagnosticId ?? crypto.randomUUID();
@@ -163,7 +181,13 @@ Use clear Markdown and be direct. For a specific question, answer it first and f
 export const sendReviewMessage = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
   .inputValidator((d: { threadId: string; message: string; language?: ContrazaLanguage }) =>
-    z.object({ threadId: documentId, message: z.string().trim().min(1).max(8000), language: languageSchema.default("en") }).parse(d),
+    z
+      .object({
+        threadId: documentId,
+        message: z.string().trim().min(1).max(8000),
+        language: languageSchema.default("en"),
+      })
+      .parse(d),
   )
   .handler(async ({ data, context }) => {
     const threadRef = context.adminDb
@@ -268,7 +292,13 @@ export const renameReviewThread = createServerFn({ method: "POST" })
 export const applyLeaseEdit = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
   .inputValidator((d: { threadId: string; instruction: string; language?: ContrazaLanguage }) =>
-    z.object({ threadId: documentId, instruction: z.string().trim().min(3).max(4000), language: languageSchema.default("en") }).parse(d),
+    z
+      .object({
+        threadId: documentId,
+        instruction: z.string().trim().min(3).max(4000),
+        language: languageSchema.default("en"),
+      })
+      .parse(d),
   )
   .handler(async ({ data, context }) => {
     const threadRef = context.adminDb
@@ -469,7 +499,8 @@ export const getUnstructuredDraftChat = createServerFn({ method: "POST" })
 
 export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
-   .inputValidator((d: { chatId: string; message: string; userMessageId: string; language?: ContrazaLanguage }) =>
+  .inputValidator(
+    (d: { chatId: string; message: string; userMessageId: string; language?: ContrazaLanguage }) =>
     z
       .object({
         chatId: documentId,
@@ -477,7 +508,7 @@ export const sendUnstructuredDraftMessage = createServerFn({ method: "POST" })
         userMessageId: z.string().uuid(),
         language: languageSchema.default("en"),
       })
-      .parse(d),
+        .parse(d),
   )
   .handler(async ({ data, context }) => {
     const chatRef = context.adminDb
@@ -603,8 +634,20 @@ export const transcribeSpeech = createServerFn({ method: "POST" })
   .middleware([requireFirebaseAuth])
   .inputValidator((d: { audioBase64: string; mimeType: string; language: ContrazaLanguage }) =>
     z.object({
-      audioBase64: z.string().min(100).max(11_200_000).regex(/^[A-Za-z0-9+/]+={0,2}$/),
-      mimeType: z.enum(["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg", "audio/aac", "audio/flac"]),
+      audioBase64: z
+        .string()
+        .min(100)
+        .max(7_000_000)
+        .regex(/^[A-Za-z0-9+/]+={0,2}$/),
+      mimeType: z.enum([
+        "audio/webm",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/ogg",
+        "audio/aac",
+        "audio/flac",
+      ]),
       language: languageSchema,
     }).parse(d),
   )
@@ -614,8 +657,12 @@ export const transcribeSpeech = createServerFn({ method: "POST" })
 
     const selectedLanguage = ({
       en: "English", hi: "Hindi", te: "Telugu", ta: "Tamil", kn: "Kannada",
-      ml: "Malayalam", bn: "Bengali", mr: "Marathi", gu: "Gujarati",
-      pa: "Punjabi", ur: "Urdu",
+      ml: "Malayalam",
+      bn: "Bengali",
+      mr: "Marathi",
+      gu: "Gujarati",
+      pa: "Punjabi",
+      ur: "Urdu",
     } as const)[data.language];
 
     const controller = new AbortController();
@@ -631,7 +678,9 @@ export const transcribeSpeech = createServerFn({ method: "POST" })
             contents: [{
               role: "user",
               parts: [
-                { text: `Transcribe the attached speech into text. The expected language is ${selectedLanguage}, but preserve the actual spoken language if the speaker switches languages. Do not translate, summarize, interpret, or answer the speaker. Preserve names, numbers, dates, currency amounts, and legal terminology. Return only the transcript, with natural punctuation.` },
+                {
+                  text: `Transcribe the attached speech into text. The expected language is ${selectedLanguage}, but preserve the actual spoken language if the speaker switches languages. Do not translate, summarize, interpret, or answer the speaker. Preserve names, numbers, dates, currency amounts, and legal terminology. Return only the transcript, with natural punctuation.`,
+                },
                 { inline_data: { mime_type: data.mimeType, data: data.audioBase64 } },
               ],
             }],
